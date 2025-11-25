@@ -380,6 +380,8 @@ class LinkedInPostsApp(App):
         Binding("q", "quit_with_todos", "Quit & Show TODOs", priority=True),
         Binding("t", "view_todos", "View TODOs", priority=True),
         Binding("m", "mark_post", "Mark Post"),
+        Binding("j", "cursor_down", "Down", show=False),
+        Binding("k", "cursor_up", "Up", show=False),
         Binding("ctrl+c", "quit", "Quit"),
     ]
 
@@ -500,6 +502,16 @@ class LinkedInPostsApp(App):
                     else:
                         self.marked_posts.add(post_idx)
                         table.update_cell(row_key, "marked", "✅")
+
+    def action_cursor_down(self):
+        """Move cursor down in the table."""
+        table = self.query_one(DataTable)
+        table.action_cursor_down()
+
+    def action_cursor_up(self):
+        """Move cursor up in the table."""
+        table = self.query_one(DataTable)
+        table.action_cursor_up()
 
     def action_view_todos(self):
         """Show TODO list in a popup screen."""
