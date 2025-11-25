@@ -9,13 +9,15 @@ import argparse
 import base64
 import sys
 import hashlib
+import subprocess
 from pathlib import Path
 from datetime import datetime, timedelta
 from textual.app import App, ComposeResult
-from textual.widgets import DataTable, Footer, Header, Static
+from textual.widgets import DataTable, Footer, Header, Static, Input
 from textual.containers import Container, VerticalScroll
 from textual.binding import Binding
 from textual.screen import Screen
+from textual import events
 
 # Cache directory for downloaded images
 CACHE_DIR = Path("cache/images")
@@ -235,6 +237,7 @@ class PostDetailScreen(Screen):
         Binding("escape", "dismiss", "Back", priority=True),
         Binding("r", "show_raw", "Raw JSON"),
         Binding("i", "show_image", "View Image"),
+        Binding("o", "open_url", "Open URL"),
     ]
 
     def __init__(self, post_data: dict, use_kitty_images: bool = False):
@@ -304,6 +307,12 @@ class PostDetailScreen(Screen):
                     input("Press Enter to return to the app...")
                     print("="*80)
 
+    def action_open_url(self):
+        """Open the post URL in the default browser."""
+        url = self.post_data.get("url")
+        if url:
+            subprocess.run(["open", url])
+
 
 class TodoScreen(Screen):
     """Screen to show TODO list of marked posts."""
@@ -359,8 +368,8 @@ class TodoScreen(Screen):
         self.app.pop_screen()
 
 
-class LinkedInPostsApp(App):
-    """Interactive LinkedIn posts viewer application."""
+class MainScreen(Screen):
+    """Main screen for the LinkedIn posts viewer."""
 
     CSS = """
     DataTable {
@@ -374,15 +383,23 @@ class LinkedInPostsApp(App):
     .marked {
         background: darkgreen;
     }
+
+    #filter-input {
+        dock: top;
+        height: 3;
+        border: solid yellow;
+        display: none;
+    }
     """
 
     BINDINGS = [
         Binding("q", "quit_with_todos", "Quit & Show TODOs", priority=True),
         Binding("t", "view_todos", "View TODOs", priority=True),
         Binding("m", "mark_post", "Mark Post"),
+        Binding("o", "open_url", "Open URL"),
+        Binding("r", "start_filter", "Filter"),
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
-        Binding("ctrl+c", "quit", "Quit"),
     ]
 
     def __init__(self, data_dir: str, use_kitty_images: bool = False):
@@ -392,10 +409,15 @@ class LinkedInPostsApp(App):
         self.posts = []
         self.marked_posts = set()
         self.post_index_map = {}  # Maps row key to post index
+        self.filter_active = False
+        self.filter_text = ""
+        self.filter_locked = False
+        self._filter_timer = None
 
     def compose(self) -> ComposeResult:
         """Create child widgets for the app."""
         yield Header()
+        yield Input(placeholder="Type to filter posts...", id="filter-input")
         yield DataTable(cursor_type="row")
         yield Footer()
 
@@ -409,6 +431,7 @@ class LinkedInPostsApp(App):
         table.add_column("Marked", key="marked")
 
         self.load_and_display_posts()
+        table.focus()
 
     def load_posts(self) -> list:
         """Load all posts from JSON files in the specified directory."""
@@ -445,6 +468,12 @@ class LinkedInPostsApp(App):
 
             if datetime_obj >= thirty_days_ago:
                 post["datetime_obj"] = datetime_obj
+                # Pre-compute searchable text for performance
+                author = post.get("author", {})
+                text = post.get("text", "")
+                username = author.get("username", "")
+                name = author.get("name", "")
+                post["_searchable"] = f"{username} {name} {text}".lower()
                 filtered_posts.append(post)
 
         # Sort by date, newest first
@@ -454,24 +483,7 @@ class LinkedInPostsApp(App):
         # Populate table
         table = self.query_one(DataTable)
         for idx, post in enumerate(self.posts):
-            date_str = post.get("posted_at", {}).get("date", "")
-            username = post.get("author", {}).get("username", "")
-            text = post.get("text", "")
-            text_preview = text[:50] if text else ""
-
-            # Check if post has media
-            media = post.get("media", {})
-            media_indicator = ""
-            if media and media.get("type") in ["image", "images", "video"]:
-                # Check if there are multiple images
-                images = media.get("images", [])
-                if images and len(images) > 1:
-                    media_indicator = f"📷({len(images)})"
-                else:
-                    media_indicator = "📷"
-
-            row_key = table.add_row(date_str, username, text_preview, media_indicator, "")
-            self.post_index_map[row_key] = idx
+            self._add_post_to_table(idx, post, table)
 
     def on_data_table_row_selected(self, event):
         """Handle row selection (Enter key)."""
@@ -480,7 +492,7 @@ class LinkedInPostsApp(App):
         if row_key is not None and row_key in self.post_index_map:
             post_idx = self.post_index_map[row_key]
             post = self.posts[post_idx]
-            self.push_screen(PostDetailScreen(post, self.use_kitty_images))
+            self.app.push_screen(PostDetailScreen(post, self.use_kitty_images))
 
     def action_mark_post(self):
         """Mark/unmark the current post."""
@@ -516,11 +528,118 @@ class LinkedInPostsApp(App):
     def action_view_todos(self):
         """Show TODO list in a popup screen."""
         marked_posts_data = [self.posts[idx] for idx in sorted(self.marked_posts)]
-        self.push_screen(TodoScreen(marked_posts_data))
+        self.app.push_screen(TodoScreen(marked_posts_data))
+
+    def action_open_url(self):
+        """Open the URL of the currently selected post in the default browser."""
+        table = self.query_one(DataTable)
+        cursor_row = table.cursor_row
+
+        if cursor_row is not None:
+            row_keys = list(table.rows.keys())
+            if cursor_row < len(row_keys):
+                row_key = row_keys[cursor_row]
+                if row_key in self.post_index_map:
+                    post_idx = self.post_index_map[row_key]
+                    post = self.posts[post_idx]
+                    url = post.get("url")
+                    if url:
+                        subprocess.run(["open", url])
+
+    def action_start_filter(self):
+        """Start filter mode."""
+        if self.filter_active:
+            return
+
+        self.filter_active = True
+        self.filter_locked = False
+        filter_input = self.query_one("#filter-input", Input)
+        filter_input.styles.display = "block"
+        filter_input.focus()
+        filter_input.value = ""
+        self.filter_text = ""
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """Handle input changes for filtering with debouncing."""
+        if event.input.id == "filter-input" and self.filter_active and not self.filter_locked:
+            self.filter_text = event.value
+
+            # Stop existing timer if any
+            if self._filter_timer is not None and self._filter_timer.is_running:
+                self._filter_timer.stop()
+
+            # Set a new timer to apply filter after 150ms of no typing
+            self._filter_timer = self.set_timer(0.15, self.apply_filter)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle ENTER key in filter input to lock the filter."""
+        if event.input.id == "filter-input" and self.filter_active:
+            self.filter_locked = True
+            table = self.query_one(DataTable)
+            table.focus()
+
+    def on_key(self, event: events.Key) -> None:
+        """Handle key events for ESC to clear filter."""
+        if event.key == "escape" and self.filter_active:
+            # Clear the filter
+            self.filter_active = False
+            self.filter_locked = False
+            self.filter_text = ""
+            filter_input = self.query_one("#filter-input", Input)
+            filter_input.styles.display = "none"
+            filter_input.value = ""
+            self.apply_filter()
+            table = self.query_one(DataTable)
+            table.focus()
+            event.prevent_default()
+
+    def apply_filter(self):
+        """Apply filter to the posts and refresh the table."""
+        table = self.query_one(DataTable)
+        table.clear()
+        self.post_index_map.clear()
+
+        if not self.filter_text:
+            # No filter, show all posts
+            for idx, post in enumerate(self.posts):
+                self._add_post_to_table(idx, post, table)
+        else:
+            # Use simple substring matching for speed
+            filter_lower = self.filter_text.lower()
+
+            for idx, post in enumerate(self.posts):
+                searchable = post.get("_searchable", "")
+
+                # Simple substring match (very fast)
+                if filter_lower in searchable:
+                    self._add_post_to_table(idx, post, table)
+
+    def _add_post_to_table(self, idx: int, post: dict, table: DataTable):
+        """Helper to add a post row to the table."""
+        date_str = post.get("posted_at", {}).get("date", "")
+        username = post.get("author", {}).get("username", "")
+        text = post.get("text", "")
+        text_preview = text[:50] if text else ""
+
+        # Check if post has media
+        media = post.get("media", {})
+        media_indicator = ""
+        if media and media.get("type") in ["image", "images", "video"]:
+            images = media.get("images", [])
+            if images and len(images) > 1:
+                media_indicator = f"📷({len(images)})"
+            else:
+                media_indicator = "📷"
+
+        # Check if post is marked
+        marked_indicator = "✅" if idx in self.marked_posts else ""
+
+        row_key = table.add_row(date_str, username, text_preview, media_indicator, marked_indicator)
+        self.post_index_map[row_key] = idx
 
     def action_quit_with_todos(self):
         """Print TODO list and quit."""
-        self.exit()
+        self.app.exit()
 
         if not self.marked_posts:
             print("\nNo posts marked for response.\n")
@@ -547,6 +666,25 @@ class LinkedInPostsApp(App):
             print(f"    Preview: {text_preview}")
             print()
 
+
+class LinkedInPostsApp(App):
+    """Interactive LinkedIn posts viewer application."""
+
+    BINDINGS = [
+        Binding("ctrl+c", "quit", "Quit"),
+    ]
+
+    def __init__(self, data_dir: str, use_kitty_images: bool = False):
+        super().__init__()
+        self.data_dir = data_dir
+        self.use_kitty_images = use_kitty_images
+
+    def on_mount(self) -> None:
+        self.push_screen(MainScreen(self.data_dir, self.use_kitty_images))
+
+    def compose(self) -> ComposeResult:
+        # Empty compose as we push the main screen immediately
+        yield from []
 
 def main():
     """Run the application."""
