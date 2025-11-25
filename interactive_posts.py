@@ -273,10 +273,14 @@ class PostDetailScreen(Screen):
             lines.append("")
             lines.append(f"[bold cyan]Media:[/bold cyan] {media.get('type', 'unknown').title()}")
 
-            if media.get("type") == "image" and media.get("url"):
-                lines.append(f"[dim]Image URL: {media.get('url')}[/dim]")
+            if media.get("type") in ["image", "images"]:
+                if media.get("type") == "image" and media.get("url"):
+                    lines.append(f"[dim]Image URL: {media.get('url')}[/dim]")
+                elif media.get("type") == "images":
+                    lines.append(f"[dim]{len(media.get('images', []))} Images[/dim]")
+                
                 if self.use_kitty_images:
-                    lines.append("[yellow]Press 'i' to view image in terminal[/yellow]")
+                    lines.append("[yellow]Press 'i' to view image(s) in terminal[/yellow]")
 
         return "\n".join(lines)
 
@@ -291,20 +295,37 @@ class PostDetailScreen(Screen):
     async def action_show_image(self):
         """Display image using Kitty graphics protocol."""
         if not self.use_kitty_images:
+            self.notify("Run with --kitty-images to view images in terminal", severity="warning")
             return
 
         media = self.post_data.get("media", {})
-        if media and media.get("type") == "image":
-            image_url = media.get("url")
-            if image_url:
-                # Suspend the app to show image directly in terminal
-                with self.app.suspend():
+        if not media:
+            return
+
+        images_to_show = []
+        if media.get("type") == "image":
+            url = media.get("url")
+            if url:
+                images_to_show.append(url)
+        elif media.get("type") == "images":
+            for img in media.get("images", []):
+                url = img.get("url")
+                if url:
+                    images_to_show.append(url)
+
+        if images_to_show:
+            # Suspend the app to show image directly in terminal
+            with self.app.suspend():
+                for i, image_url in enumerate(images_to_show):
                     print("\n" + "="*80)
-                    print("Displaying image (press Enter to return)...")
+                    print(f"Displaying image {i+1}/{len(images_to_show)} (press Enter to return/continue)...")
                     print("="*80 + "\n")
                     display_image_kitty_to_terminal(image_url)
                     print("\n" + "="*80)
-                    input("Press Enter to return to the app...")
+                    if i < len(images_to_show) - 1:
+                        input("Press Enter for next image...")
+                    else:
+                        input("Press Enter to return to the app...")
                     print("="*80)
 
     def action_open_url(self):
@@ -692,10 +713,12 @@ def main():
         description="Interactive LinkedIn posts viewer with marking and TODO list functionality."
     )
     parser.add_argument(
-        "--kitty-images",
-        action="store_true",
-        help="Display images using Kitty terminal graphics (requires Kitty terminal and 'icat' command)"
+        "--no-kitty-images",
+        dest="kitty_images",
+        action="store_false",
+        help="Disable display of images using Kitty terminal graphics"
     )
+    parser.set_defaults(kitty_images=True)
     parser.add_argument(
         "--data-dir",
         default="data/20251125/linkedin",
