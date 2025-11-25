@@ -5,6 +5,9 @@ Interactive LinkedIn posts viewer with marking and TODO list functionality.
 
 import json
 import glob
+import argparse
+import base64
+import sys
 from pathlib import Path
 from datetime import datetime, timedelta
 from textual.app import App, ComposeResult
@@ -12,6 +15,104 @@ from textual.widgets import DataTable, Footer, Header, Static
 from textual.containers import Container, VerticalScroll
 from textual.binding import Binding
 from textual.screen import Screen
+
+
+def display_image_kitty_to_terminal(image_url: str):
+    """
+    Display an image directly to the terminal using Kitty's icat or graphics protocol.
+    This bypasses Textual and writes directly to stdout.
+
+    Args:
+        image_url: URL or path to the image
+    """
+    import subprocess
+    import tempfile
+    from urllib.request import urlopen
+    from urllib.parse import urlparse
+
+    try:
+        # Method 1: Try using icat command (most reliable for Kitty)
+        try:
+            # Try different icat command variations
+            icat_cmd = None
+            for cmd in ['kitty', 'icat', '/Applications/Kitty.app/Contents/MacOS/kitty']:
+                try:
+                    result = subprocess.run([cmd, '+icat' if cmd == 'kitty' else '--version'],
+                                          capture_output=True,
+                                          timeout=1)
+                    if result.returncode == 0:
+                        icat_cmd = [cmd, '+icat'] if cmd == 'kitty' else [cmd]
+                        break
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    continue
+
+            if not icat_cmd:
+                raise FileNotFoundError("icat not found")
+
+            # Download image to temp file
+            parsed = urlparse(image_url)
+            if parsed.scheme in ('http', 'https'):
+                print(f"Downloading image...")
+                with urlopen(image_url, timeout=10) as response:
+                    image_data = response.read()
+            else:
+                with open(image_url, 'rb') as f:
+                    image_data = f.read()
+
+            # Save to temp file
+            with tempfile.NamedTemporaryFile(mode='wb', suffix='.jpg', delete=False) as tmp:
+                tmp.write(image_data)
+                tmp_path = tmp.name
+
+            # Display with icat
+            print(f"Image size: {len(image_data):,} bytes\n")
+            display_cmd = icat_cmd + ['--align', 'left', tmp_path]
+            subprocess.run(display_cmd)
+
+            # Clean up
+            Path(tmp_path).unlink()
+            return
+
+        except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
+            # icat not available, fall through to method 2
+            pass
+
+        # Method 2: Use Kitty graphics protocol directly
+        parsed = urlparse(image_url)
+        if parsed.scheme in ('http', 'https'):
+            print(f"Downloading image (using graphics protocol)...")
+            with urlopen(image_url, timeout=10) as response:
+                image_data = response.read()
+        else:
+            with open(image_url, 'rb') as f:
+                image_data = f.read()
+
+        print(f"Image size: {len(image_data):,} bytes")
+
+        # Encode image as base64
+        encoded = base64.standard_b64encode(image_data).decode('ascii')
+
+        # Split into chunks
+        chunk_size = 4096
+        chunks = [encoded[i:i+chunk_size] for i in range(0, len(encoded), chunk_size)]
+        print(f"Transmitting {len(chunks)} chunks...\n")
+
+        # Output Kitty graphics protocol escape sequences
+        for i, chunk in enumerate(chunks):
+            if i == 0:
+                sys.stdout.buffer.write(f"\033_Ga=T,f=100;{chunk}\033\\".encode('ascii'))
+            elif i == len(chunks) - 1:
+                sys.stdout.buffer.write(f"\033_Gm=0;{chunk}\033\\".encode('ascii'))
+            else:
+                sys.stdout.buffer.write(f"\033_Gm=1;{chunk}\033\\".encode('ascii'))
+
+        sys.stdout.buffer.flush()
+        print("\n(Image should appear above if you're in Kitty terminal)")
+
+    except Exception as e:
+        print(f"Error loading image: {e}")
+        print(f"\nImage URL: {image_url}")
+        print("You can open this URL in a browser to view the image.")
 
 
 class RawJsonScreen(Screen):
@@ -53,11 +154,13 @@ class PostDetailScreen(Screen):
     BINDINGS = [
         Binding("escape", "dismiss", "Back", priority=True),
         Binding("r", "show_raw", "Raw JSON"),
+        Binding("i", "show_image", "View Image"),
     ]
 
-    def __init__(self, post_data: dict):
+    def __init__(self, post_data: dict, use_kitty_images: bool = False):
         super().__init__()
         self.post_data = post_data
+        self.use_kitty_images = use_kitty_images
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -81,6 +184,17 @@ class PostDetailScreen(Screen):
             self.post_data.get("text", "No text available."),
         ]
 
+        # Add media information
+        media = self.post_data.get("media", {})
+        if media and media.get("type") in ["image", "video"]:
+            lines.append("")
+            lines.append(f"[bold cyan]Media:[/bold cyan] {media.get('type', 'unknown').title()}")
+
+            if media.get("type") == "image" and media.get("url"):
+                lines.append(f"[dim]Image URL: {media.get('url')}[/dim]")
+                if self.use_kitty_images:
+                    lines.append("[yellow]Press 'i' to view image in terminal[/yellow]")
+
         return "\n".join(lines)
 
     def action_dismiss(self):
@@ -90,6 +204,25 @@ class PostDetailScreen(Screen):
     def action_show_raw(self):
         """Show raw JSON data."""
         self.app.push_screen(RawJsonScreen(self.post_data))
+
+    async def action_show_image(self):
+        """Display image using Kitty graphics protocol."""
+        if not self.use_kitty_images:
+            return
+
+        media = self.post_data.get("media", {})
+        if media and media.get("type") == "image":
+            image_url = media.get("url")
+            if image_url:
+                # Suspend the app to show image directly in terminal
+                with self.app.suspend():
+                    print("\n" + "="*80)
+                    print("Displaying image (press Enter to return)...")
+                    print("="*80 + "\n")
+                    display_image_kitty_to_terminal(image_url)
+                    print("\n" + "="*80)
+                    input("Press Enter to return to the app...")
+                    print("="*80)
 
 
 class TodoScreen(Screen):
@@ -170,9 +303,10 @@ class LinkedInPostsApp(App):
         Binding("ctrl+c", "quit", "Quit"),
     ]
 
-    def __init__(self, data_dir: str):
+    def __init__(self, data_dir: str, use_kitty_images: bool = False):
         super().__init__()
         self.data_dir = data_dir
+        self.use_kitty_images = use_kitty_images
         self.posts = []
         self.marked_posts = set()
         self.post_index_map = {}  # Maps row key to post index
@@ -257,7 +391,7 @@ class LinkedInPostsApp(App):
         if row_key is not None and row_key in self.post_index_map:
             post_idx = self.post_index_map[row_key]
             post = self.posts[post_idx]
-            self.push_screen(PostDetailScreen(post))
+            self.push_screen(PostDetailScreen(post, self.use_kitty_images))
 
     def action_mark_post(self):
         """Mark/unmark the current post."""
@@ -317,8 +451,23 @@ class LinkedInPostsApp(App):
 
 def main():
     """Run the application."""
-    data_dir = "data/20251125/linkedin"
-    app = LinkedInPostsApp(data_dir)
+    parser = argparse.ArgumentParser(
+        description="Interactive LinkedIn posts viewer with marking and TODO list functionality."
+    )
+    parser.add_argument(
+        "--kitty-images",
+        action="store_true",
+        help="Display images using Kitty terminal graphics (requires Kitty terminal and 'icat' command)"
+    )
+    parser.add_argument(
+        "--data-dir",
+        default="data/20251125/linkedin",
+        help="Directory containing LinkedIn post JSON files (default: data/20251125/linkedin)"
+    )
+
+    args = parser.parse_args()
+
+    app = LinkedInPostsApp(args.data_dir, use_kitty_images=args.kitty_images)
     app.run()
 
 
