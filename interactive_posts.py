@@ -8,6 +8,7 @@ import glob
 import argparse
 import base64
 import sys
+import hashlib
 from pathlib import Path
 from datetime import datetime, timedelta
 from textual.app import App, ComposeResult
@@ -15,6 +16,101 @@ from textual.widgets import DataTable, Footer, Header, Static
 from textual.containers import Container, VerticalScroll
 from textual.binding import Binding
 from textual.screen import Screen
+
+# Cache directory for downloaded images
+CACHE_DIR = Path("cache/images")
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def get_cached_image_path(image_url: str) -> Path:
+    """
+    Get the cached image path for a given URL.
+    Creates a cache filename based on MD5 hash of the URL.
+
+    Args:
+        image_url: URL of the image
+
+    Returns:
+        Path to the cached image file
+    """
+    # Generate MD5 hash of URL
+    url_hash = hashlib.md5(image_url.encode('utf-8')).hexdigest()
+
+    # Try to determine extension from URL
+    from urllib.parse import urlparse
+    parsed = urlparse(image_url)
+    path = parsed.path.lower()
+
+    # Default to jpg if we can't determine extension
+    ext = '.jpg'
+    if '.png' in path:
+        ext = '.png'
+    elif '.gif' in path:
+        ext = '.gif'
+    elif '.webp' in path:
+        ext = '.webp'
+
+    return CACHE_DIR / f"{url_hash}{ext}"
+
+
+def download_image(image_url: str) -> bytes:
+    """
+    Download an image from URL with proper User-Agent header.
+
+    Args:
+        image_url: URL of the image
+
+    Returns:
+        Image data as bytes
+    """
+    from urllib.request import Request, urlopen
+
+    req = Request(
+        image_url,
+        headers={
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+        }
+    )
+    with urlopen(req, timeout=10) as response:
+        return response.read()
+
+
+def get_image_data(image_url: str) -> bytes:
+    """
+    Get image data, using cache if available, otherwise download and cache.
+
+    Args:
+        image_url: URL or path to the image
+
+    Returns:
+        Image data as bytes
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(image_url)
+
+    # If it's a local file, just read it
+    if parsed.scheme not in ('http', 'https'):
+        with open(image_url, 'rb') as f:
+            return f.read()
+
+    # Check cache first
+    cache_path = get_cached_image_path(image_url)
+    if cache_path.exists():
+        print(f"Using cached image: {cache_path.name}")
+        with open(cache_path, 'rb') as f:
+            return f.read()
+
+    # Download and cache
+    print(f"Downloading image...")
+    image_data = download_image(image_url)
+
+    # Save to cache
+    with open(cache_path, 'wb') as f:
+        f.write(image_data)
+    print(f"Cached image: {cache_path.name}")
+
+    return image_data
 
 
 def display_image_kitty_to_terminal(image_url: str):
@@ -31,6 +127,9 @@ def display_image_kitty_to_terminal(image_url: str):
     from urllib.parse import urlparse
 
     try:
+        # Get image data (from cache or download)
+        image_data = get_image_data(image_url)
+
         # Method 1: Try using icat command (most reliable for Kitty)
         try:
             # Try different icat command variations
@@ -48,16 +147,6 @@ def display_image_kitty_to_terminal(image_url: str):
 
             if not icat_cmd:
                 raise FileNotFoundError("icat not found")
-
-            # Download image to temp file
-            parsed = urlparse(image_url)
-            if parsed.scheme in ('http', 'https'):
-                print(f"Downloading image...")
-                with urlopen(image_url, timeout=10) as response:
-                    image_data = response.read()
-            else:
-                with open(image_url, 'rb') as f:
-                    image_data = f.read()
 
             # Save to temp file
             with tempfile.NamedTemporaryFile(mode='wb', suffix='.jpg', delete=False) as tmp:
@@ -78,15 +167,6 @@ def display_image_kitty_to_terminal(image_url: str):
             pass
 
         # Method 2: Use Kitty graphics protocol directly
-        parsed = urlparse(image_url)
-        if parsed.scheme in ('http', 'https'):
-            print(f"Downloading image (using graphics protocol)...")
-            with urlopen(image_url, timeout=10) as response:
-                image_data = response.read()
-        else:
-            with open(image_url, 'rb') as f:
-                image_data = f.read()
-
         print(f"Image size: {len(image_data):,} bytes")
 
         # Encode image as base64
@@ -379,9 +459,16 @@ class LinkedInPostsApp(App):
 
             # Check if post has media
             media = post.get("media", {})
-            has_media = "📷" if media and media.get("type") in ["image", "video"] else ""
+            media_indicator = ""
+            if media and media.get("type") in ["image", "images", "video"]:
+                # Check if there are multiple images
+                images = media.get("images", [])
+                if images and len(images) > 1:
+                    media_indicator = f"📷({len(images)})"
+                else:
+                    media_indicator = "📷"
 
-            row_key = table.add_row(date_str, username, text_preview, has_media, "")
+            row_key = table.add_row(date_str, username, text_preview, media_indicator, "")
             self.post_index_map[row_key] = idx
 
     def on_data_table_row_selected(self, event):
