@@ -1,6 +1,6 @@
-# LinkedIn Posts Viewer
+# social-tui
 
-Interactive TUI application for viewing and managing LinkedIn posts from Apify scraper output.
+Interactive TUI application for viewing and managing LinkedIn posts from JSON data sources.
 
 ## Features
 
@@ -64,7 +64,7 @@ python interactive_posts.py
 
 | Key | Action |
 |-----|--------|
-| `‘`/`“` | Navigate through posts |
+| `â€˜`/`â€œ` | Navigate through posts |
 | `Enter` | View full post details |
 | `Escape` | Return to list view |
 | `m` | Mark/unmark post for response |
