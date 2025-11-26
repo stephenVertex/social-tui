@@ -419,6 +419,7 @@ class MainScreen(Screen):
         Binding("m", "mark_post", "Mark Post"),
         Binding("o", "open_url", "Open URL"),
         Binding("r", "start_filter", "Filter"),
+        Binding("s", "save_marked", "Save Marked"),
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
     ]
@@ -586,7 +587,7 @@ class MainScreen(Screen):
             self.filter_text = event.value
 
             # Stop existing timer if any
-            if self._filter_timer is not None and self._filter_timer.is_running:
+            if self._filter_timer is not None:
                 self._filter_timer.stop()
 
             # Set a new timer to apply filter after 150ms of no typing
@@ -613,6 +614,47 @@ class MainScreen(Screen):
             table = self.query_one(DataTable)
             table.focus()
             event.prevent_default()
+
+    def action_save_marked(self):
+        """Save marked posts to a JSON file."""
+        if not self.marked_posts:
+            self.notify("No posts marked to save.", severity="warning")
+            return
+
+        # Collect marked posts
+        marked_posts_data = []
+        for idx in sorted(self.marked_posts):
+            post = self.posts[idx]
+            # Create a copy to avoid modifying the original if we add metadata later
+            marked_posts_data.append(post.copy())
+
+        # Create export structure
+        export_data = {
+            "search": {
+                "date": datetime.now().isoformat(),
+                "query_string": self.filter_text if self.filter_active else ""
+            },
+            "matching_elements": marked_posts_data
+        }
+
+        # Generate filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"marked_posts_{timestamp}.json"
+
+        try:
+            with open(filename, 'w') as f:
+                # Helper for datetime serialization if needed (though posts usually have strings)
+                def json_serializer(obj):
+                    if isinstance(obj, datetime):
+                        return obj.isoformat()
+                    raise TypeError(f"Type {type(obj)} not serializable")
+
+                json.dump(export_data, f, indent=2, default=json_serializer)
+            
+            self.notify(f"Saved {len(marked_posts_data)} posts to {filename}", severity="information")
+            
+        except Exception as e:
+            self.notify(f"Error saving file: {e}", severity="error")
 
     def apply_filter(self):
         """Apply filter to the posts and refresh the table."""
