@@ -213,7 +213,7 @@ class RawJsonScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         yield VerticalScroll(
-            Static(self._format_json(), id="raw-json")
+            Static(self._format_json(), id="raw-json", markup=False)
         )
         yield Footer()
 
@@ -265,10 +265,17 @@ class PostDetailScreen(Screen):
         author = self.post_data.get("author", {})
         posted_at = self.post_data.get("posted_at", {})
 
+        # Construct name from first_name and last_name if 'name' field doesn't exist
+        name = author.get('name')
+        if not name:
+            first_name = author.get('first_name', '')
+            last_name = author.get('last_name', '')
+            name = f"{first_name} {last_name}".strip() or 'N/A'
+
         lines = [
             f"[bold cyan]Date:[/bold cyan] {posted_at.get('date', 'N/A')}",
             f"[bold cyan]Author:[/bold cyan] {author.get('username', 'N/A')}",
-            f"[bold cyan]Name:[/bold cyan] {author.get('name', 'N/A')}",
+            f"[bold cyan]Name:[/bold cyan] {name}",
             f"[bold cyan]URL:[/bold cyan] {self.post_data.get('url', 'N/A')}",
         ]
 
@@ -422,6 +429,13 @@ class TodoScreen(Screen):
             text = post.get("text", "")
             url = post.get("url", "N/A")
 
+            # Construct name from first_name and last_name if 'name' field doesn't exist
+            name = author.get('name')
+            if not name:
+                first_name = author.get('first_name', '')
+                last_name = author.get('last_name', '')
+                name = f"{first_name} {last_name}".strip() or 'N/A'
+
             # Truncate text for preview
             text_preview = text[:100] + "..." if len(text) > 100 else text
 
@@ -429,7 +443,7 @@ class TodoScreen(Screen):
                 f"[bold yellow]({idx})[/bold yellow] Respond to post by [bold]{author.get('username', 'N/A')}[/bold]",
                 f"    [cyan]Date:[/cyan] {posted_at.get('date', 'N/A')}",
                 f"    [cyan]URL:[/cyan] {url}",
-                f"    [cyan]Profile:[/cyan] {author.get('name', 'N/A')} (@{author.get('username', 'N/A')})",
+                f"    [cyan]Profile:[/cyan] {name} (@{author.get('username', 'N/A')})",
                 f"    [cyan]Preview:[/cyan] {text_preview}",
                 ""
             ])
@@ -1075,6 +1089,13 @@ class MainScreen(Screen):
             text = post.get("text", "")
             url = post.get("url", "N/A")
 
+            # Construct name from first_name and last_name if 'name' field doesn't exist
+            name = author.get('name')
+            if not name:
+                first_name = author.get('first_name', '')
+                last_name = author.get('last_name', '')
+                name = f"{first_name} {last_name}".strip() or 'N/A'
+
             # Format actions for display
             actions = mark_info["actions"]
             action_list = ", ".join(action_names.get(a, a) for a in sorted(actions))
@@ -1086,7 +1107,7 @@ class MainScreen(Screen):
             print(f"    Author: {author.get('username', 'N/A')}")
             print(f"    Date: {posted_at.get('date', 'N/A')}")
             print(f"    URL: {url}")
-            print(f"    Profile: {author.get('name', 'N/A')} (@{author.get('username', 'N/A')})")
+            print(f"    Profile: {name} (@{author.get('username', 'N/A')})")
             print(f"    Preview: {text_preview}")
             print()
 
