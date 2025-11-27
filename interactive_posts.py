@@ -391,6 +391,101 @@ class TodoScreen(Screen):
         self.app.pop_screen()
 
 
+class ActionModal(Screen):
+    """Modal screen for selecting multiple actions for a marked post."""
+
+    # Define available actions with their keys and descriptions
+    ACTIONS = {
+        'q': {'name': 'Queue for repost', 'desc': 'Add to repost queue'},
+        'a': {'name': 'Autoreact', 'desc': 'Automatically react (like, celebrate, love)'},
+        'c': {'name': 'Autocomment', 'desc': 'Automatically add a comment'},
+        'n': {'name': 'Manual comment', 'desc': 'Mark for manual commenting'},
+        't': {'name': 'Autorepost with thoughts', 'desc': 'Automatically repost with your thoughts'},
+        'r': {'name': 'Manual repost with thoughts', 'desc': 'Mark for manual repost with thoughts'},
+        's': {'name': 'Save', 'desc': 'Save post for later'},
+    }
+
+    CSS = """
+    ActionModal {
+        align: center middle;
+    }
+
+    #action-modal-container {
+        width: 80;
+        height: auto;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+
+    .action-item {
+        padding: 0 1;
+        margin: 0;
+    }
+
+    .action-selected {
+        background: darkgreen;
+        color: white;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "dismiss", "Close", priority=True),
+        Binding("q", "toggle_action('q')", show=False),
+        Binding("a", "toggle_action('a')", show=False),
+        Binding("c", "toggle_action('c')", show=False),
+        Binding("n", "toggle_action('n')", show=False),
+        Binding("t", "toggle_action('t')", show=False),
+        Binding("r", "toggle_action('r')", show=False),
+        Binding("s", "toggle_action('s')", show=False),
+    ]
+
+    def __init__(self, selected_actions: set = None):
+        super().__init__()
+        self.selected_actions = selected_actions or set()
+
+    def compose(self) -> ComposeResult:
+        """Create the modal content."""
+        with Container(id="action-modal-container"):
+            yield Static("[bold cyan]Select Actions for Marked Post[/bold cyan]\n", id="modal-title")
+            yield Static(self._format_actions(), id="action-list")
+            yield Static("\n[dim]Press action key to toggle, ESC to close[/dim]", id="modal-help")
+
+    def _format_actions(self) -> str:
+        """Format the action list with current selections."""
+        lines = []
+        for key in ['q', 'a', 'c', 'n', 't', 'r', 's']:
+            action = self.ACTIONS[key]
+            is_selected = key in self.selected_actions
+            checkbox = "[✓]" if is_selected else "[ ]"
+            style = "bold green" if is_selected else "white"
+            lines.append(f"[{style}]{checkbox} [{key}] {action['name']}[/{style}]")
+        return "\n".join(lines)
+
+    def action_toggle_action(self, action_key: str):
+        """Toggle an action on/off."""
+        if action_key in self.selected_actions:
+            self.selected_actions.remove(action_key)
+        else:
+            self.selected_actions.add(action_key)
+
+        # Update the display
+        action_list = self.query_one("#action-list", Static)
+        action_list.update(self._format_actions())
+
+    def on_key(self, event: events.Key) -> None:
+        """Handle key presses for action toggling."""
+        key = event.key
+        if key in self.ACTIONS:
+            self.action_toggle_action(key)
+            event.prevent_default()
+            event.stop()
+
+    def action_dismiss(self):
+        """Close the modal and return the selected actions."""
+        self.dismiss(self.selected_actions)
+
+
 class MainScreen(Screen):
     """Main screen for the LinkedIn posts viewer."""
 
@@ -433,7 +528,8 @@ class MainScreen(Screen):
     BINDINGS = [
         Binding("q", "quit_with_todos", "Quit & Show TODOs", priority=True),
         Binding("t", "view_todos", "View TODOs", priority=True),
-        Binding("m", "mark_post", "Mark Post"),
+        Binding("m", "mark_post", "Mark Post (Save)"),
+        Binding("M", "mark_with_actions", "Mark with Actions", key_display="shift+m"),
         Binding("o", "open_url", "Open URL"),
         Binding("r", "start_filter", "Filter"),
         Binding("s", "save_marked", "Save Marked"),
@@ -448,7 +544,7 @@ class MainScreen(Screen):
         self.use_db = use_db
         self.use_kitty_images = use_kitty_images
         self.posts = []
-        self.marked_posts = set()
+        self.marked_posts = {}  # Maps post_idx to {"actions": set(), "timestamp": datetime}
         self.post_index_map = {}  # Maps row key to post index
         self.filter_active = False
         self.filter_text = ""
@@ -608,7 +704,7 @@ class MainScreen(Screen):
             self.app.push_screen(PostDetailScreen(post, self.use_kitty_images))
 
     def action_mark_post(self):
-        """Mark/unmark the current post."""
+        """Mark/unmark the current post with 'save' action only."""
         table = self.query_one(DataTable)
         cursor_row = table.cursor_row
 
@@ -622,11 +718,59 @@ class MainScreen(Screen):
                     post_idx = self.post_index_map[row_key]
 
                     if post_idx in self.marked_posts:
-                        self.marked_posts.remove(post_idx)
+                        # Unmark the post completely
+                        del self.marked_posts[post_idx]
                         table.update_cell(row_key, "marked", "")
                     else:
-                        self.marked_posts.add(post_idx)
-                        table.update_cell(row_key, "marked", "✅")
+                        # Mark with 'save' action only
+                        self.marked_posts[post_idx] = {
+                            "actions": {'s'},
+                            "timestamp": datetime.now()
+                        }
+                        table.update_cell(row_key, "marked", self._format_actions_display({'s'}))
+
+    def _format_actions_display(self, actions: set) -> str:
+        """Format action set for display in the marked column."""
+        if not actions:
+            return ""
+        # Sort actions for consistent display
+        sorted_actions = ''.join(sorted(actions))
+        return f"[{sorted_actions}]"
+
+    def action_mark_with_actions(self):
+        """Open modal to mark the current post with multiple actions."""
+        table = self.query_one(DataTable)
+        cursor_row = table.cursor_row
+
+        if cursor_row is not None:
+            row_keys = list(table.rows.keys())
+            if cursor_row < len(row_keys):
+                row_key = row_keys[cursor_row]
+
+                if row_key in self.post_index_map:
+                    post_idx = self.post_index_map[row_key]
+
+                    # Get existing actions if post is already marked
+                    existing_actions = set()
+                    if post_idx in self.marked_posts:
+                        existing_actions = self.marked_posts[post_idx]["actions"].copy()
+
+                    # Open the action modal with a callback
+                    def handle_actions(selected_actions):
+                        """Handle the selected actions from the modal."""
+                        if selected_actions:
+                            self.marked_posts[post_idx] = {
+                                "actions": selected_actions,
+                                "timestamp": datetime.now()
+                            }
+                            table.update_cell(row_key, "marked", self._format_actions_display(selected_actions))
+                        elif post_idx in self.marked_posts:
+                            # If no actions selected, unmark the post
+                            del self.marked_posts[post_idx]
+                            table.update_cell(row_key, "marked", "")
+
+                    modal = ActionModal(existing_actions)
+                    self.app.push_screen(modal, handle_actions)
 
     def action_cursor_down(self):
         """Move cursor down in the table."""
@@ -640,7 +784,7 @@ class MainScreen(Screen):
 
     def action_view_todos(self):
         """Show TODO list in a popup screen."""
-        marked_posts_data = [self.posts[idx] for idx in sorted(self.marked_posts)]
+        marked_posts_data = [self.posts[idx] for idx in sorted(self.marked_posts.keys())]
         self.app.push_screen(TodoScreen(marked_posts_data))
 
     def action_open_url(self):
@@ -718,17 +862,23 @@ class MainScreen(Screen):
             event.prevent_default()
 
     def action_save_marked(self):
-        """Save marked posts to a JSON file."""
+        """Save marked posts to a JSON file with action metadata."""
         if not self.marked_posts:
             self.notify("No posts marked to save.", severity="warning")
             return
 
-        # Collect marked posts
+        # Collect marked posts with action metadata
         marked_posts_data = []
-        for idx in sorted(self.marked_posts):
-            post = self.posts[idx]
-            # Create a copy to avoid modifying the original if we add metadata later
-            marked_posts_data.append(post.copy())
+        for idx in sorted(self.marked_posts.keys()):
+            post = self.posts[idx].copy()
+
+            # Add action metadata to the post
+            mark_info = self.marked_posts[idx]
+            post["_mark_metadata"] = {
+                "actions": list(mark_info["actions"]),
+                "timestamp": mark_info["timestamp"].isoformat()
+            }
+            marked_posts_data.append(post)
 
         # Create export structure
         export_data = {
@@ -805,8 +955,12 @@ class MainScreen(Screen):
             else:
                 media_indicator = "📷"
 
-        # Check if post is marked
-        marked_indicator = "✅" if idx in self.marked_posts else ""
+        # Check if post is marked and show action indicators
+        if idx in self.marked_posts:
+            actions = self.marked_posts[idx]["actions"]
+            marked_indicator = self._format_actions_display(actions)
+        else:
+            marked_indicator = ""
         
         # Check if post is new
         new_indicator = "🆕" if post.get("_is_new") else ""
@@ -815,7 +969,7 @@ class MainScreen(Screen):
         self.post_index_map[row_key] = idx
 
     def action_quit_with_todos(self):
-        """Print TODO list and quit."""
+        """Print TODO list with action metadata and quit."""
         self.app.exit()
 
         if not self.marked_posts:
@@ -826,17 +980,34 @@ class MainScreen(Screen):
         print("TODO: LinkedIn Posts to Respond To")
         print("="*80 + "\n")
 
-        for idx, post_idx in enumerate(sorted(self.marked_posts), 1):
+        # Action name mapping for display
+        action_names = {
+            'q': 'Queue for repost',
+            'a': 'Autoreact',
+            'c': 'Autocomment',
+            'n': 'Manual comment',
+            't': 'Autorepost with thoughts',
+            'r': 'Manual repost with thoughts',
+            's': 'Save'
+        }
+
+        for idx, post_idx in enumerate(sorted(self.marked_posts.keys()), 1):
             post = self.posts[post_idx]
+            mark_info = self.marked_posts[post_idx]
             author = post.get("author", {})
             posted_at = post.get("posted_at", {})
             text = post.get("text", "")
             url = post.get("url", "N/A")
 
+            # Format actions for display
+            actions = mark_info["actions"]
+            action_list = ", ".join(action_names.get(a, a) for a in sorted(actions))
+
             # Truncate text for preview
             text_preview = text[:100] + "..." if len(text) > 100 else text
 
-            print(f"({idx}) Respond to post by {author.get('username', 'N/A')}")
+            print(f"({idx}) Actions: [{action_list}]")
+            print(f"    Author: {author.get('username', 'N/A')}")
             print(f"    Date: {posted_at.get('date', 'N/A')}")
             print(f"    URL: {url}")
             print(f"    Profile: {author.get('name', 'N/A')} (@{author.get('username', 'N/A')})")
