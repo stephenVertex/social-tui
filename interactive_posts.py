@@ -459,7 +459,7 @@ class ActionModal(Screen):
             is_selected = key in self.selected_actions
             checkbox = "[✓]" if is_selected else "[ ]"
             style = "bold green" if is_selected else "white"
-            lines.append(f"[{style}]{checkbox} [{key}] {action['name']}[/{style}]")
+            lines.append(f"[{style}]{checkbox} ({key}) - {action['name']}[/{style}]")
         return "\n".join(lines)
 
     def action_toggle_action(self, action_key: str):
@@ -733,9 +733,8 @@ class MainScreen(Screen):
         """Format action set for display in the marked column."""
         if not actions:
             return ""
-        # Sort actions for consistent display
-        sorted_actions = ''.join(sorted(actions))
-        return f"[{sorted_actions}]"
+        # Sort actions for consistent display (e.g., "aq" for autoreact and queue)
+        return ''.join(sorted(actions))
 
     def action_mark_with_actions(self):
         """Open modal to mark the current post with multiple actions."""
