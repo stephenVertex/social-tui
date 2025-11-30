@@ -662,16 +662,16 @@ class MainScreen(Screen):
                 conn = sqlite3.connect(self.data_source)
                 c = conn.cursor()
                 
-                # Get the latest import timestamp (exact) to define "new"
-                c.execute("SELECT MAX(imported_at) FROM posts")
+                # Get the latest import timestamp to define "new"
+                c.execute("SELECT MAX(first_seen_at) FROM posts")
                 latest_import_timestamp = c.fetchone()[0]
-                
-                query = "SELECT json_data, first_seen_at, imported_at FROM posts"
+
+                query = "SELECT raw_json, first_seen_at FROM posts"
                 params = []
-                
+
                 if self.show_new_only and latest_import_timestamp:
-                    # If showing new only, filter by the exact latest import timestamp
-                    query += " WHERE imported_at = ?"
+                    # Show all posts from the most recent import batch (within 5 minutes of latest)
+                    query += " WHERE datetime(first_seen_at) >= datetime(?, '-5 minutes')"
                     params.append(latest_import_timestamp)
                 
                 c.execute(query, params)
@@ -680,9 +680,12 @@ class MainScreen(Screen):
                 for row in rows:
                     post = json.loads(row[0])
                     post['_first_seen_at'] = row[1]
-                    # Mark as new if it belongs to the latest import batch
-                    if latest_import_timestamp and row[2] == latest_import_timestamp:
-                        post['_is_new'] = True
+                    # Mark as new if it belongs to the latest import batch (within 5 minutes)
+                    if latest_import_timestamp and row[1]:
+                        from datetime import datetime, timedelta
+                        latest_dt = datetime.fromisoformat(latest_import_timestamp)
+                        row_dt = datetime.fromisoformat(row[1])
+                        post['_is_new'] = (latest_dt - row_dt) <= timedelta(minutes=5)
                     else:
                         post['_is_new'] = False
                     posts.append(post)
@@ -1175,8 +1178,8 @@ def main():
     )
     group.add_argument(
         "--db",
-        default="data/posts.db",
-        help="Path to SQLite database (default: data/posts.db)"
+        default="data/posts_v2.db",
+        help="Path to SQLite database (default: data/posts_v2.db)"
     )
 
     args = parser.parse_args()

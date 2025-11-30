@@ -232,7 +232,7 @@ class TagProfileModal(Screen):
         self.profile = profile
         self.tag_manager = tag_manager
         self.all_tags = tag_manager.get_all_tags()
-        self.profile_tag_ids = {tag['id'] for tag in tag_manager.get_profile_tags(profile['id'])}
+        self.profile_tag_ids = {tag['id'] for tag in tag_manager.get_profile_tags(profile['profile_id'])}
         self.selected_tag_ids = self.profile_tag_ids.copy()
 
     def compose(self) -> ComposeResult:
@@ -717,13 +717,13 @@ class ProfileManagementScreen(Screen):
 
         target_row_idx = None
         for idx, profile in enumerate(self.profiles):
-            tags = self.tag_manager.get_profile_tag_names(profile['id'])
+            tags = self.tag_manager.get_profile_tag_names(profile['profile_id'])
             tag_display = ', '.join(f"[{self._get_tag_color(tag)}]{tag}[/]" for tag in tags)
 
             active_display = "[green]Yes[/]" if profile['is_active'] else "[red]No[/]"
 
             row_key = table.add_row(
-                str(profile['id']),
+                str(profile['profile_id']),
                 profile['username'],
                 profile['name'],
                 tag_display,
@@ -733,7 +733,7 @@ class ProfileManagementScreen(Screen):
             self.profile_index_map[row_key] = idx
 
             # Track the row index if this is the profile we want to restore cursor to
-            if preserve_cursor_profile_id and profile['id'] == preserve_cursor_profile_id:
+            if preserve_cursor_profile_id and profile['profile_id'] == preserve_cursor_profile_id:
                 target_row_idx = idx
 
         self.update_status_bar()
@@ -791,7 +791,7 @@ class ProfileManagementScreen(Screen):
                     profile = self.profiles[profile_idx]
 
                     # Delete profile
-                    self.profile_manager.delete_profile(profile['id'])
+                    self.profile_manager.delete_profile(profile['profile_id'])
                     self.load_and_display_profiles()
 
     def action_edit_profile(self):
@@ -811,11 +811,11 @@ class ProfileManagementScreen(Screen):
                     def handle_edit(result):
                         if result:
                             self.profile_manager.update_profile(
-                                profile['id'],
+                                profile['profile_id'],
                                 **result
                             )
                             # Preserve cursor on the profile we just edited
-                            self.load_and_display_profiles(preserve_cursor_profile_id=profile['id'])
+                            self.load_and_display_profiles(preserve_cursor_profile_id=profile['profile_id'])
 
                     self.app.push_screen(EditProfileModal(profile), handle_edit)
 
@@ -835,9 +835,9 @@ class ProfileManagementScreen(Screen):
 
                     def handle_tag(result):
                         if result is not None:
-                            self.tag_manager.set_profile_tags(profile['id'], result)
+                            self.tag_manager.set_profile_tags(profile['profile_id'], result)
                             # Preserve cursor on the profile we just tagged
-                            self.load_and_display_profiles(preserve_cursor_profile_id=profile['id'])
+                            self.load_and_display_profiles(preserve_cursor_profile_id=profile['profile_id'])
 
                     self.app.push_screen(
                         TagProfileModal(profile, self.tag_manager),
