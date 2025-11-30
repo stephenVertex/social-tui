@@ -162,16 +162,29 @@ class ProfileManager:
             active_only: If True, only return active profiles
 
         Returns:
-            List of profile dictionaries
+            List of profile dictionaries with post_count field
         """
         conn = self._get_connection()
         cursor = conn.cursor()
 
         try:
             if active_only:
-                cursor.execute("SELECT * FROM profiles WHERE is_active = 1 ORDER BY name")
+                cursor.execute("""
+                    SELECT p.*, COUNT(posts.post_id) as post_count
+                    FROM profiles p
+                    LEFT JOIN posts ON p.username = posts.author_username
+                    WHERE p.is_active = 1
+                    GROUP BY p.profile_id
+                    ORDER BY p.name
+                """)
             else:
-                cursor.execute("SELECT * FROM profiles ORDER BY name")
+                cursor.execute("""
+                    SELECT p.*, COUNT(posts.post_id) as post_count
+                    FROM profiles p
+                    LEFT JOIN posts ON p.username = posts.author_username
+                    GROUP BY p.profile_id
+                    ORDER BY p.name
+                """)
 
             return [dict(row) for row in cursor.fetchall()]
         finally:
@@ -184,18 +197,22 @@ class ProfileManager:
             tag_name: Name of the tag to filter by
 
         Returns:
-            List of profile dictionaries
+            List of profile dictionaries with post_count field
         """
         conn = self._get_connection()
         cursor = conn.cursor()
 
         try:
             cursor.execute("""
-                SELECT DISTINCT p.*
+                SELECT DISTINCT p.profile_id, p.username, p.name, p.platform,
+                       p.notes, p.is_active, p.created_at, p.updated_at,
+                       p.last_synced_at, COUNT(posts.post_id) as post_count
                 FROM profiles p
                 JOIN profile_tags pt ON p.profile_id = pt.profile_id
                 JOIN tags t ON pt.tag_id = t.tag_id
+                LEFT JOIN posts ON p.username = posts.author_username
                 WHERE t.name = ?
+                GROUP BY p.profile_id
                 ORDER BY p.name
             """, (tag_name,))
 
@@ -211,7 +228,7 @@ class ProfileManager:
             match_all: If True, profile must have ALL tags (AND). If False, ANY tag (OR)
 
         Returns:
-            List of profile dictionaries
+            List of profile dictionaries with post_count field
         """
         if not tag_names:
             return self.get_all_profiles()
@@ -224,25 +241,31 @@ class ProfileManager:
                 # Profile must have ALL tags (AND)
                 placeholders = ','.join('?' * len(tag_names))
                 cursor.execute(f"""
-                    SELECT DISTINCT p.*
+                    SELECT p.*, COUNT(posts.post_id) as post_count
                     FROM profiles p
+                    LEFT JOIN posts ON p.username = posts.author_username
                     WHERE (
                         SELECT COUNT(DISTINCT t.name)
                         FROM profile_tags pt
                         JOIN tags t ON pt.tag_id = t.tag_id
                         WHERE pt.profile_id = p.profile_id AND t.name IN ({placeholders})
                     ) = ?
+                    GROUP BY p.profile_id
                     ORDER BY p.name
                 """, tag_names + [len(tag_names)])
             else:
                 # Profile must have ANY tag (OR)
                 placeholders = ','.join('?' * len(tag_names))
                 cursor.execute(f"""
-                    SELECT DISTINCT p.*
+                    SELECT DISTINCT p.profile_id, p.username, p.name, p.platform,
+                           p.notes, p.is_active, p.created_at, p.updated_at,
+                           p.last_synced_at, COUNT(posts.post_id) as post_count
                     FROM profiles p
                     JOIN profile_tags pt ON p.profile_id = pt.profile_id
                     JOIN tags t ON pt.tag_id = t.tag_id
+                    LEFT JOIN posts ON p.username = posts.author_username
                     WHERE t.name IN ({placeholders})
+                    GROUP BY p.profile_id
                     ORDER BY p.name
                 """, tag_names)
 
