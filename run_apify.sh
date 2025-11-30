@@ -1,7 +1,11 @@
 #!/bin/bash
 
 # Read CSV file and process each username
-tail -n +2 input-data.csv | while IFS=, read -r name username; do
+tail -n +2 data/input-data.csv | while IFS=, read -r name username; do
+  # Strip carriage returns (for Windows-style line endings)
+  username=$(echo "$username" | tr -d '\r')
+  name=$(echo "$name" | tr -d '\r')
+
   # Skip empty lines
   if [ -z "$username" ]; then
     continue
@@ -26,7 +30,7 @@ tail -n +2 input-data.csv | while IFS=, read -r name username; do
 
   # Generate timestamp in the format YYYY-MM-DD_HH-MM-SS-mmm
   timestamp=$(date +"%Y-%m-%d_%H-%M-%S")
-  milliseconds=$(( $(date +%N) / 1000000 ))
+  milliseconds=$(( 10#$(date +%N) / 1000000 ))
   full_timestamp="${timestamp}-${milliseconds}"
 
   # Output filename
@@ -35,11 +39,7 @@ tail -n +2 input-data.csv | while IFS=, read -r name username; do
   echo "Processing username: $username -> $output_file"
 
   # Run apify command
-  echo "{
-  \"username\": \"$username\",
-  \"page_number\": 1,
-  \"limit\": 3
-}" | apify call apimaestro/linkedin-profile-posts --silent --output-dataset > "$output_file"
+  echo "{\"username\": \"$username\", \"page_number\": 1, \"limit\": 10}" | apify call apimaestro/linkedin-profile-posts --silent --output-dataset > "$output_file"
 
   echo "Completed: $output_file"
   echo ""
