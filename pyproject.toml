@@ -7,4 +7,6 @@ requires-python = ">=3.13"
 dependencies = [
     "rich>=14.2.0",
     "textual>=1.0.0",
+    "python-dotenv>=1.0.0",
+    "supabase>=2.0.0",
 ]

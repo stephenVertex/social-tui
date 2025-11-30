@@ -4,7 +4,7 @@ Unified data update script for social-tui.
 
 This script:
 1. Runs run_apify.sh to scrape latest LinkedIn data
-2. Imports the scraped data into the database
+2. Imports the scraped data into Supabase database
 3. Shows updated statistics
 
 Usage:
@@ -19,7 +19,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from manage_data import get_connection, create_download_run, import_directory, complete_download_run
+from supabase_client import get_supabase_client
+from manage_data import create_download_run, import_directory, complete_download_run
 
 
 def run_apify_scrape():
@@ -96,19 +97,17 @@ def import_data(directory_path):
     print(f"Found {len(json_files)} JSON files")
 
     try:
-        conn = get_connection()
+        client = get_supabase_client()
 
         # Create download run
-        run_id = create_download_run(conn, script_name="update_data.py")
+        run_id = create_download_run(client, script_name="update_data.py")
         print(f"Created download run: {run_id}")
 
         # Import directory
-        stats, _ = import_directory(conn, str(directory_path), run_id=run_id)
+        stats, _ = import_directory(client, str(directory_path), run_id=run_id)
 
         # Complete download run
-        complete_download_run(conn, run_id, stats)
-
-        conn.close()
+        complete_download_run(client, run_id, stats)
 
         print("\nImport Summary:")
         print(f"  Run ID:     {run_id}")
@@ -134,36 +133,27 @@ def show_statistics():
     print("=" * 70)
 
     try:
-        conn = get_connection()
-        cursor = conn.cursor()
+        client = get_supabase_client()
 
         # Post stats
-        cursor.execute("SELECT COUNT(*) FROM posts")
-        total_posts = cursor.fetchone()[0]
+        total_posts_result = client.table('posts').select('post_id', count='exact').execute()
+        total_posts = total_posts_result.count if total_posts_result.count is not None else 0
 
-        cursor.execute("SELECT COUNT(*) FROM posts WHERE is_marked=1")
-        marked = cursor.fetchone()[0]
+        marked_result = client.table('posts').select('post_id', count='exact').eq('is_marked', True).execute()
+        marked = marked_result.count if marked_result.count is not None else 0
 
         # Download stats
-        cursor.execute("SELECT COUNT(*) FROM data_downloads")
-        total_downloads = cursor.fetchone()[0]
+        total_downloads_result = client.table('data_downloads').select('download_id', count='exact').execute()
+        total_downloads = total_downloads_result.count if total_downloads_result.count is not None else 0
 
-        cursor.execute("SELECT COUNT(*) FROM download_runs")
-        total_runs = cursor.fetchone()[0]
+        total_runs_result = client.table('download_runs').select('run_id', count='exact').execute()
+        total_runs = total_runs_result.count if total_runs_result.count is not None else 0
 
         # Recent runs
-        cursor.execute("""
-            SELECT run_id,
-                   datetime(started_at) as started,
-                   datetime(completed_at) as completed,
-                   status,
-                   posts_fetched,
-                   posts_new
-            FROM download_runs
-            ORDER BY started_at DESC
-            LIMIT 5
-        """)
-        recent_runs = cursor.fetchall()
+        recent_runs_result = client.table('download_runs').select(
+            'run_id, started_at, completed_at, status, posts_fetched, posts_new'
+        ).order('started_at', desc=True).limit(5).execute()
+        recent_runs = recent_runs_result.data
 
         print(f"\nOverall Statistics:")
         print(f"  Total Posts:     {total_posts:,}")
@@ -174,14 +164,19 @@ def show_statistics():
         if recent_runs:
             print(f"\nRecent Download Runs:")
             for run in recent_runs:
-                run_id, started, completed, status, fetched, new = run
+                run_id = run['run_id']
+                started = run['started_at'][:19] if run.get('started_at') else 'N/A'
+                completed = run['completed_at'][:19] if run.get('completed_at') else 'N/A'
+                status = run['status']
+                fetched = run.get('posts_fetched', 0)
+                new = run.get('posts_new', 0)
                 status_symbol = "✓" if status == "completed" else "✗"
                 print(f"  {status_symbol} {run_id} | {started} | {fetched} posts ({new} new)")
 
-        conn.close()
-
     except Exception as e:
         print(f"Error getting statistics: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def main():

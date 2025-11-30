@@ -8,7 +8,6 @@ from textual.screen import Screen
 from textual import events
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Callable
-import sqlite3
 import subprocess
 import re
 
@@ -409,8 +408,8 @@ class CreateTagModal(Screen):
                 color = self.COLORS[self.selected_color_idx]
                 tag_id = self.tag_manager.add_tag(tag_name, color)
                 self.dismiss({"tag_id": tag_id, "name": tag_name, "color": color})
-            except sqlite3.IntegrityError:
-                # Tag already exists
+            except Exception as e:
+                # Tag already exists or other error
                 # Could show error message
                 return
         else:
@@ -692,9 +691,9 @@ class ProfileManagementScreen(Screen):
 
     def __init__(self, db_path: str = "data/posts.db"):
         super().__init__()
-        self.db_path = db_path
-        self.profile_manager = ProfileManager(db_path)
-        self.tag_manager = TagManager(db_path)
+        self.db_path = db_path  # Kept for backwards compatibility, but not used
+        self.profile_manager = ProfileManager()
+        self.tag_manager = TagManager()
         self.profiles = []
         self.profile_index_map = {}  # Maps row key to profile index
         self.current_filter_tags = []
@@ -794,8 +793,8 @@ class ProfileManagementScreen(Screen):
                         result['notes']
                     )
                     self.load_and_display_profiles()
-                except sqlite3.IntegrityError:
-                    # Username already exists
+                except Exception as e:
+                    # Username already exists or other error
                     pass
 
         self.app.push_screen(AddProfileModal(), handle_add)

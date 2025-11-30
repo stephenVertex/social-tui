@@ -9,6 +9,29 @@ wheels/
 # Virtual environments
 .venv
 
+# Environment variables (contains secrets)
+.env
+
 # Data files
 data/
 input-data.csv
+
+# Supabase
+.branches
+.temp
+supabase/.branches
+supabase/.temp
+
+# Cache files
+cache/
+
+# Test artifacts
+.agent/
+walkthroughs/
+
+# Temporary migration files
+schema_sqlite.sql
+schema_postgres.sql
+schema_postgres_ready.sql
+cleanup_test_data.py
+test_*.py
