@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any, Callable
 import sqlite3
 import subprocess
+import re
 
 from profile_manager import ProfileManager
 from tag_manager import TagManager
@@ -52,12 +53,35 @@ class AddProfileModal(Screen):
     def __init__(self):
         super().__init__()
 
+    @staticmethod
+    def extract_username_from_linkedin_url(input_str: str) -> str:
+        """Extract username from LinkedIn URL or return the input if it's already a username.
+
+        Args:
+            input_str: Either a LinkedIn URL or a username
+
+        Returns:
+            The extracted username
+        """
+        input_str = input_str.strip()
+
+        # Check if it looks like a URL
+        if 'linkedin.com/in/' in input_str.lower():
+            # Extract username from URL
+            # Pattern matches: https://www.linkedin.com/in/username/ or similar variations
+            match = re.search(r'linkedin\.com/in/([^/?]+)', input_str, re.IGNORECASE)
+            if match:
+                return match.group(1)
+
+        # If not a URL or no match, return the input as-is (assume it's already a username)
+        return input_str
+
     def compose(self) -> ComposeResult:
         """Create the modal content."""
         with Container(id="add-profile-container"):
             yield Static("[bold cyan]Add New Profile[/bold cyan]\n", id="modal-title")
-            yield Label("Username (required):")
-            yield Input(placeholder="e.g., stephenvertex", id="username-input", classes="input-field")
+            yield Label("LinkedIn URL or Username (required):")
+            yield Input(placeholder="e.g., https://linkedin.com/in/stephenvertex or stephenvertex", id="username-input", classes="input-field")
             yield Label("Name (required):")
             yield Input(placeholder="e.g., Stephen Douglas", id="name-input", classes="input-field")
             yield Label("Notes (optional):")
@@ -77,13 +101,16 @@ class AddProfileModal(Screen):
             name_input = self.query_one("#name-input", Input)
             notes_input = self.query_one("#notes-input", Input)
 
-            username = username_input.value.strip()
+            username_or_url = username_input.value.strip()
             name = name_input.value.strip()
             notes = notes_input.value.strip()
 
-            if not username or not name:
+            if not username_or_url or not name:
                 # Show error (could add error message widget)
                 return
+
+            # Extract username from URL if provided
+            username = self.extract_username_from_linkedin_url(username_or_url)
 
             self.dismiss({"username": username, "name": name, "notes": notes})
         else:

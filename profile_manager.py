@@ -177,7 +177,7 @@ class ProfileManager:
                     LEFT JOIN posts ON p.username = posts.author_username
                     WHERE p.is_active = 1
                     GROUP BY p.profile_id
-                    ORDER BY p.name
+                    ORDER BY p.created_at DESC
                 """)
             else:
                 cursor.execute("""
@@ -187,7 +187,7 @@ class ProfileManager:
                     FROM profiles p
                     LEFT JOIN posts ON p.username = posts.author_username
                     GROUP BY p.profile_id
-                    ORDER BY p.name
+                    ORDER BY p.created_at DESC
                 """)
 
             return [dict(row) for row in cursor.fetchall()]
@@ -217,7 +217,7 @@ class ProfileManager:
                 LEFT JOIN posts ON p.username = posts.author_username
                 WHERE t.name = ?
                 GROUP BY p.profile_id
-                ORDER BY p.name
+                ORDER BY p.created_at DESC
             """, (tag_name,))
 
             return [dict(row) for row in cursor.fetchall()]
@@ -257,7 +257,7 @@ class ProfileManager:
                         WHERE pt.profile_id = p.profile_id AND t.name IN ({placeholders})
                     ) = ?
                     GROUP BY p.profile_id
-                    ORDER BY p.name
+                    ORDER BY p.created_at DESC
                 """, tag_names + [len(tag_names)])
             else:
                 # Profile must have ANY tag (OR)
@@ -272,7 +272,7 @@ class ProfileManager:
                     LEFT JOIN posts ON p.username = posts.author_username
                     WHERE t.name IN ({placeholders})
                     GROUP BY p.profile_id
-                    ORDER BY p.name
+                    ORDER BY p.created_at DESC
                 """, tag_names)
 
             return [dict(row) for row in cursor.fetchall()]

@@ -301,6 +301,163 @@ class PostDetailScreen(Screen):
         else:
             lines.append(f"[bold cyan]Marked:[/bold cyan] No")
 
+        # Add engagement data if available
+        # Check both 'stats' (current format) and 'engagement' (legacy/alternative format)
+        engagement = self.post_data.get("stats", self.post_data.get("engagement", {}))
+        engagement_history = self.post_data.get("engagement_history", [])
+
+        if engagement or engagement_history:
+            lines.append("")
+            lines.append("[bold cyan]Engagement:[/bold cyan]")
+
+            # Check if we have historical data to show growth
+            if engagement_history and len(engagement_history) > 1:
+                # Use the latest historical snapshot as current if available
+                current = engagement_history[-1]
+                previous = engagement_history[-2]
+
+                # Display historical timeline table first
+                lines.append("")
+                lines.append("[bold]Historical Timeline:[/bold]")
+                lines.append("┌─────────────────────┬────────────┬──────────┬──────────┐")
+                lines.append("│ Date                │ Reactions  │ Comments │ Reposts  │")
+                lines.append("├─────────────────────┼────────────┼──────────┼──────────┤")
+
+                # Show up to 10 most recent snapshots
+                display_history = engagement_history[-10:] if len(engagement_history) > 10 else engagement_history
+                for snapshot in display_history:
+                    date_str = snapshot.get("_downloaded_at", "")
+                    try:
+                        dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                        date_display = dt.strftime("%b %d %H:%M")
+                    except:
+                        date_display = date_str[:16] if len(date_str) > 16 else date_str
+
+                    reactions = snapshot.get("total_reactions", snapshot.get("reactions", 0))
+                    comments = snapshot.get("comments", 0)
+                    reposts = snapshot.get("reposts", 0)
+
+                    lines.append(f"│ {date_display:<19} │ {reactions:>10} │ {comments:>8} │ {reposts:>8} │")
+
+                lines.append("└─────────────────────┴────────────┴──────────┴──────────┘")
+
+                # Display summary with trend
+                lines.append("")
+                lines.append("[bold]Summary:[/bold]")
+                lines.append("┌─────────────────┬──────────┬──────────┬────────────┐")
+                lines.append("│ Metric          │ Current  │ Change   │ Trend      │")
+                lines.append("├─────────────────┼──────────┼──────────┼────────────┤")
+
+                metric_keys = [
+                    ("Reactions", "total_reactions", "reactions"),
+                    ("Comments", "comments", None),
+                    ("Reposts", "reposts", "shares"),
+                ]
+
+                # Add views if available
+                if current.get("views") is not None:
+                    metric_keys.append(("Views", "views", None))
+
+                for metric_name, primary_key, fallback_key in metric_keys:
+                    current_val = current.get(primary_key, current.get(fallback_key, 0) if fallback_key else 0)
+                    prev_val = previous.get(primary_key, previous.get(fallback_key, 0) if fallback_key else 0)
+
+                    change = current_val - prev_val
+                    change_str = f"+{change}" if change > 0 else str(change)
+
+                    # Create simple ASCII trend visualization
+                    if change > 0:
+                        trend = "↗ " + "▂" * min(int(change / max(prev_val, 1) * 10), 8)
+                    elif change < 0:
+                        trend = "↘ "
+                    else:
+                        trend = "→ "
+
+                    lines.append(f"│ {metric_name:<15} │ {current_val:>8} │ {change_str:>8} │ {trend:<10} │")
+
+                lines.append("└─────────────────┴──────────┴──────────┴────────────┘")
+
+                # Show overall statistics
+                lines.append("")
+                first_snapshot = engagement_history[0]
+                last_snapshot = engagement_history[-1]
+
+                reactions_total_growth = last_snapshot.get("total_reactions", last_snapshot.get("reactions", 0)) - first_snapshot.get("total_reactions", first_snapshot.get("reactions", 0))
+                comments_total_growth = last_snapshot.get("comments", 0) - first_snapshot.get("comments", 0)
+                reposts_total_growth = last_snapshot.get("reposts", 0) - first_snapshot.get("reposts", 0)
+
+                # Show time range
+                first_time = first_snapshot.get("_downloaded_at", "")
+                last_time = last_snapshot.get("_downloaded_at", "")
+                if first_time and last_time:
+                    try:
+                        first_dt = datetime.fromisoformat(first_time.replace('Z', '+00:00'))
+                        last_dt = datetime.fromisoformat(last_time.replace('Z', '+00:00'))
+                        days_elapsed = (last_dt - first_dt).total_seconds() / 86400
+                        time_range = f"{first_dt.strftime('%b %d')} → {last_dt.strftime('%b %d %H:%M')}"
+                        lines.append(f"[dim]Tracked: {time_range} ({len(engagement_history)} snapshots over {days_elapsed:.1f} days)[/dim]")
+                    except:
+                        lines.append(f"[dim]Tracked: {len(engagement_history)} snapshots[/dim]")
+
+                if reactions_total_growth != 0 or comments_total_growth != 0 or reposts_total_growth != 0:
+                    growth_parts = []
+                    if reactions_total_growth != 0:
+                        sign = "+" if reactions_total_growth > 0 else ""
+                        growth_parts.append(f"Reactions {sign}{reactions_total_growth}")
+                    if comments_total_growth != 0:
+                        sign = "+" if comments_total_growth > 0 else ""
+                        growth_parts.append(f"Comments {sign}{comments_total_growth}")
+                    if reposts_total_growth != 0:
+                        sign = "+" if reposts_total_growth > 0 else ""
+                        growth_parts.append(f"Reposts {sign}{reposts_total_growth}")
+                    lines.append(f"[dim]Total Change: {', '.join(growth_parts)}[/dim]")
+            elif engagement_history and len(engagement_history) == 1:
+                # Single historical snapshot - display as simple table
+                snapshot = engagement_history[0]
+                lines.append("┌─────────────────┬──────────┐")
+                lines.append("│ Metric          │ Count    │")
+                lines.append("├─────────────────┼──────────┤")
+
+                metrics = [
+                    ("Reactions", snapshot.get("total_reactions", snapshot.get("reactions", 0))),
+                    ("Comments", snapshot.get("comments", 0)),
+                    ("Reposts", snapshot.get("reposts", 0)),
+                ]
+
+                if snapshot.get("views") is not None:
+                    metrics.append(("Views", snapshot.get("views", 0)))
+
+                for metric_name, value in metrics:
+                    lines.append(f"│ {metric_name:<15} │ {value:>8} │")
+
+                lines.append("└─────────────────┴──────────┘")
+
+                date_str = snapshot.get("_downloaded_at", "")
+                if date_str:
+                    lines.append(f"[dim]Snapshot from: {date_str[:16]}[/dim]")
+            elif engagement:
+                # Display simple table from raw stats (no historical data)
+                lines.append("┌─────────────────┬──────────┐")
+                lines.append("│ Metric          │ Count    │")
+                lines.append("├─────────────────┼──────────┤")
+
+                # Display engagement metrics in a table format
+                metrics = [
+                    ("Reactions", engagement.get("total_reactions", engagement.get("reactions", engagement.get("likes", 0)))),
+                    ("Comments", engagement.get("comments", 0)),
+                    ("Reposts", engagement.get("reposts", engagement.get("shares", 0))),
+                ]
+
+                # Add views if available
+                if engagement.get("views") is not None:
+                    metrics.append(("Views", engagement.get("views", 0)))
+
+                for metric_name, value in metrics:
+                    lines.append(f"│ {metric_name:<15} │ {value:>8} │")
+
+                lines.append("└─────────────────┴──────────┘")
+                lines.append("[dim](No historical tracking data available)[/dim]")
+
         lines.extend([
             "",
             "[bold cyan]Text:[/bold cyan]",
@@ -656,30 +813,32 @@ class MainScreen(Screen):
     def load_posts(self) -> list:
         """Load posts from DB or JSON files."""
         posts = []
-        
+
         if self.use_db:
             try:
                 conn = sqlite3.connect(self.data_source)
                 c = conn.cursor()
-                
+
                 # Get the latest import timestamp to define "new"
                 c.execute("SELECT MAX(first_seen_at) FROM posts")
                 latest_import_timestamp = c.fetchone()[0]
 
-                query = "SELECT raw_json, first_seen_at FROM posts"
+                query = "SELECT raw_json, first_seen_at, post_id FROM posts"
                 params = []
 
                 if self.show_new_only and latest_import_timestamp:
                     # Show all posts from the most recent import batch (within 5 minutes of latest)
                     query += " WHERE datetime(first_seen_at) >= datetime(?, '-5 minutes')"
                     params.append(latest_import_timestamp)
-                
+
                 c.execute(query, params)
                 rows = c.fetchall()
-                
+
                 for row in rows:
                     post = json.loads(row[0])
                     post['_first_seen_at'] = row[1]
+                    post['_post_id'] = row[2]
+
                     # Mark as new if it belongs to the latest import batch (within 5 minutes)
                     if latest_import_timestamp and row[1]:
                         from datetime import datetime, timedelta
@@ -688,13 +847,37 @@ class MainScreen(Screen):
                         post['_is_new'] = (latest_dt - row_dt) <= timedelta(minutes=5)
                     else:
                         post['_is_new'] = False
+
+                    # Load historical engagement data from data_downloads table
+                    if row[2]:  # if we have a post_id
+                        c.execute("""
+                            SELECT downloaded_at, stats_json
+                            FROM data_downloads
+                            WHERE post_id = ?
+                            ORDER BY downloaded_at ASC
+                        """, (row[2],))
+
+                        history_rows = c.fetchall()
+                        if history_rows:
+                            engagement_history = []
+                            for hist_row in history_rows:
+                                try:
+                                    stats = json.loads(hist_row[1])
+                                    stats['_downloaded_at'] = hist_row[0]
+                                    engagement_history.append(stats)
+                                except json.JSONDecodeError:
+                                    continue
+
+                            if engagement_history:
+                                post['engagement_history'] = engagement_history
+
                     posts.append(post)
-                    
+
                 conn.close()
-                
+
                 if self.show_new_only:
                     self.notify(f"Showing {len(posts)} new posts from {latest_import_timestamp}")
-                    
+
             except Exception as e:
                 self.notify(f"Error loading from DB: {e}", severity="error")
                 return []
@@ -706,7 +889,7 @@ class MainScreen(Screen):
                     data = json.load(f)
                     if isinstance(data, list):
                         posts.extend(data)
-                        
+
         return posts
 
     def parse_date(self, date_str: str) -> datetime:
