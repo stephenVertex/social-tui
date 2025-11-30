@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Interactive LinkedIn posts viewer with marking and TODO list functionality.
-Now supports SQLite database backend for deduplication and management.
+Now supports Supabase database backend for deduplication and management.
 """
 
 import json
@@ -11,9 +11,9 @@ import base64
 import sys
 import hashlib
 import subprocess
-import sqlite3
 from pathlib import Path
 from datetime import datetime, timedelta
+from supabase_client import get_supabase_client
 from textual.app import App, ComposeResult
 from textual.widgets import DataTable, Footer, Header, Static, Input, Checkbox
 from textual.containers import Container, VerticalScroll, Horizontal
@@ -807,6 +807,10 @@ class MainScreen(Screen):
         table.add_column("Marked", key="marked")
         table.add_column("New", key="new")
 
+        # Show loading message
+        if self.use_db:
+            self.notify("Loading posts from Supabase...", timeout=30)
+
         self.load_and_display_posts()
         table.focus()
 
@@ -816,70 +820,77 @@ class MainScreen(Screen):
 
         if self.use_db:
             try:
-                conn = sqlite3.connect(self.data_source)
-                c = conn.cursor()
+                client = get_supabase_client()
 
                 # Get the latest import timestamp to define "new"
-                c.execute("SELECT MAX(first_seen_at) FROM posts")
-                latest_import_timestamp = c.fetchone()[0]
+                latest_result = client.table('posts').select('first_seen_at').order('first_seen_at', desc=True).limit(1).execute()
+                latest_import_timestamp = latest_result.data[0]['first_seen_at'] if latest_result.data else None
 
-                query = "SELECT raw_json, first_seen_at, post_id FROM posts"
-                params = []
+                # Build query
+                query = client.table('posts').select('raw_json, first_seen_at, post_id')
 
                 if self.show_new_only and latest_import_timestamp:
                     # Show all posts from the most recent import batch (within 5 minutes of latest)
-                    query += " WHERE datetime(first_seen_at) >= datetime(?, '-5 minutes')"
-                    params.append(latest_import_timestamp)
+                    # Calculate the cutoff timestamp
+                    latest_dt = datetime.fromisoformat(latest_import_timestamp)
+                    cutoff_dt = latest_dt - timedelta(minutes=5)
+                    cutoff_timestamp = cutoff_dt.isoformat()
 
-                c.execute(query, params)
-                rows = c.fetchall()
+                    query = query.gte('first_seen_at', cutoff_timestamp)
 
+                result = query.execute()
+                rows = result.data
+
+                # Optimize: Load all engagement history in one query (avoid N+1 problem)
+                post_ids = [row['post_id'] for row in rows if row.get('post_id')]
+                engagement_by_post = {}
+
+                if post_ids:
+                    # Batch query for all engagement history
+                    history_result = client.table('data_downloads').select('post_id, downloaded_at, stats_json').in_('post_id', post_ids).order('post_id, downloaded_at').execute()
+
+                    # Group engagement history by post_id
+                    for hist_row in history_result.data:
+                        post_id = hist_row['post_id']
+                        if post_id not in engagement_by_post:
+                            engagement_by_post[post_id] = []
+
+                        try:
+                            stats = json.loads(hist_row['stats_json'])
+                            stats['_downloaded_at'] = hist_row['downloaded_at']
+                            engagement_by_post[post_id].append(stats)
+                        except json.JSONDecodeError:
+                            continue
+
+                # Process posts with pre-loaded engagement history
                 for row in rows:
-                    post = json.loads(row[0])
-                    post['_first_seen_at'] = row[1]
-                    post['_post_id'] = row[2]
+                    post = json.loads(row['raw_json'])
+                    post['_first_seen_at'] = row['first_seen_at']
+                    post['_post_id'] = row['post_id']
 
                     # Mark as new if it belongs to the latest import batch (within 5 minutes)
-                    if latest_import_timestamp and row[1]:
-                        from datetime import datetime, timedelta
+                    if latest_import_timestamp and row['first_seen_at']:
                         latest_dt = datetime.fromisoformat(latest_import_timestamp)
-                        row_dt = datetime.fromisoformat(row[1])
+                        row_dt = datetime.fromisoformat(row['first_seen_at'])
                         post['_is_new'] = (latest_dt - row_dt) <= timedelta(minutes=5)
                     else:
                         post['_is_new'] = False
 
-                    # Load historical engagement data from data_downloads table
-                    if row[2]:  # if we have a post_id
-                        c.execute("""
-                            SELECT downloaded_at, stats_json
-                            FROM data_downloads
-                            WHERE post_id = ?
-                            ORDER BY downloaded_at ASC
-                        """, (row[2],))
-
-                        history_rows = c.fetchall()
-                        if history_rows:
-                            engagement_history = []
-                            for hist_row in history_rows:
-                                try:
-                                    stats = json.loads(hist_row[1])
-                                    stats['_downloaded_at'] = hist_row[0]
-                                    engagement_history.append(stats)
-                                except json.JSONDecodeError:
-                                    continue
-
-                            if engagement_history:
-                                post['engagement_history'] = engagement_history
+                    # Attach pre-loaded engagement history
+                    if row['post_id'] and row['post_id'] in engagement_by_post:
+                        post['engagement_history'] = engagement_by_post[row['post_id']]
 
                     posts.append(post)
 
-                conn.close()
-
                 if self.show_new_only:
-                    self.notify(f"Showing {len(posts)} new posts from {latest_import_timestamp}")
+                    self.notify(f"Loaded {len(posts)} new posts from {latest_import_timestamp}", severity="information")
+                else:
+                    self.notify(f"Loaded {len(posts)} posts from Supabase", severity="information")
 
             except Exception as e:
                 self.notify(f"Error loading from DB: {e}", severity="error")
+                import traceback
+                traceback.print_exc()
                 return []
         else:
             # Legacy file loading
