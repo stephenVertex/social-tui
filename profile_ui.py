@@ -740,8 +740,16 @@ class ProfileManagementScreen(Screen):
 
         target_row_idx = None
         for idx, profile in enumerate(self.profiles):
-            tags = self.tag_manager.get_profile_tag_names(profile['profile_id'])
-            tag_display = ', '.join(f"[{self._get_tag_color(tag)}]{tag}[/]" for tag in tags)
+            # Tags are already included in the profile data from the view with colors
+            tag_displays = []
+            if profile.get('tags'):
+                for tag in profile['tags']:
+                    if isinstance(tag, dict) and 'name' in tag:
+                        tag_name = tag['name']
+                        tag_color = tag.get('color', 'white')
+                        tag_displays.append(f"[{tag_color}]{tag_name}[/]")
+
+            tag_display = ', '.join(tag_displays)
 
             active_display = "[green]Yes[/]" if profile['is_active'] else "[red]No[/]"
 

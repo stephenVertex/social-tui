@@ -1,7 +1,7 @@
 """Profile management for social-tui with AWS-style identifiers."""
 
 import csv
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Optional, Any
 
@@ -39,8 +39,8 @@ class ProfileManager:
             'name': name,
             'platform': platform,
             'notes': notes,
-            'created_at': datetime.now().isoformat(),
-            'updated_at': datetime.now().isoformat()
+            'created_at': datetime.now(timezone.utc).isoformat(),
+            'updated_at': datetime.now(timezone.utc).isoformat()
         }).execute()
 
         return profile_id
@@ -71,7 +71,7 @@ class ProfileManager:
             return False
 
         # Always update the updated_at timestamp
-        kwargs['updated_at'] = datetime.now().isoformat()
+        kwargs['updated_at'] = datetime.now(timezone.utc).isoformat()
 
         result = self.client.table('profiles').update(kwargs).eq('profile_id', profile_id).execute()
         return len(result.data) > 0
@@ -107,23 +107,16 @@ class ProfileManager:
             active_only: If True, only return active profiles
 
         Returns:
-            List of profile dictionaries with post_count field
+            List of profile dictionaries with post_count and tags fields
         """
-        # Build query
-        query = self.client.table('profiles').select('*').order('created_at', desc=True)
+        # Query from the optimized view (replaces 3N+2 queries with 1 query)
+        query = self.client.table('v_profiles_with_stats').select('*')
 
         if active_only:
             query = query.eq('is_active', True)
 
         result = query.execute()
-        profiles = result.data
-
-        # Add post counts for each profile
-        for profile in profiles:
-            posts_result = self.client.table('posts').select('post_id', count='exact').eq('author_username', profile['username']).execute()
-            profile['post_count'] = posts_result.count if posts_result.count is not None else 0
-
-        return profiles
+        return result.data
 
     def get_profiles_by_tag(self, tag_name: str) -> List[Dict[str, Any]]:
         """Get all profiles with a specific tag.
@@ -167,53 +160,38 @@ class ProfileManager:
             match_all: If True, profile must have ALL tags (AND). If False, ANY tag (OR)
 
         Returns:
-            List of profile dictionaries with post_count field
+            List of profile dictionaries with post_count and tags fields
         """
         if not tag_names:
             return self.get_all_profiles()
 
-        # Get tag IDs for the given tag names
-        tags_result = self.client.table('tags').select('tag_id, name').in_('name', tag_names).execute()
-        if not tags_result.data:
-            return []
+        # Get all profiles from the optimized view
+        all_profiles = self.get_all_profiles()
 
-        tag_ids = [tag['tag_id'] for tag in tags_result.data]
+        # Filter profiles based on tags (client-side filtering)
+        # Normalize tag names for comparison
+        search_tags = set(tag.lower() for tag in tag_names)
 
-        if match_all:
-            # Profile must have ALL tags
-            # Get all profile_tags for these tags
-            pt_result = self.client.table('profile_tags').select('profile_id, tag_id').in_('tag_id', tag_ids).execute()
+        matching_profiles = []
+        for profile in all_profiles:
+            # Extract tag names from the tags JSON array
+            profile_tag_names = set()
+            if profile.get('tags'):
+                for tag in profile['tags']:
+                    if isinstance(tag, dict) and 'name' in tag:
+                        profile_tag_names.add(tag['name'].lower())
 
-            # Count how many tags each profile has
-            profile_tag_counts = {}
-            for pt in pt_result.data:
-                pid = pt['profile_id']
-                profile_tag_counts[pid] = profile_tag_counts.get(pid, 0) + 1
+            # Check if profile matches the filter criteria
+            if match_all:
+                # Profile must have ALL tags
+                if search_tags.issubset(profile_tag_names):
+                    matching_profiles.append(profile)
+            else:
+                # Profile must have ANY tag
+                if search_tags.intersection(profile_tag_names):
+                    matching_profiles.append(profile)
 
-            # Filter profiles that have all tags
-            matching_profile_ids = [pid for pid, count in profile_tag_counts.items() if count == len(tag_names)]
-
-            if not matching_profile_ids:
-                return []
-
-            profiles_result = self.client.table('profiles').select('*').in_('profile_id', matching_profile_ids).order('created_at', desc=True).execute()
-        else:
-            # Profile must have ANY tag (OR)
-            pt_result = self.client.table('profile_tags').select('profile_id').in_('tag_id', tag_ids).execute()
-            if not pt_result.data:
-                return []
-
-            profile_ids = list(set([pt['profile_id'] for pt in pt_result.data]))
-            profiles_result = self.client.table('profiles').select('*').in_('profile_id', profile_ids).order('created_at', desc=True).execute()
-
-        profiles = profiles_result.data
-
-        # Add post counts
-        for profile in profiles:
-            posts_result = self.client.table('posts').select('post_id', count='exact').eq('author_username', profile['username']).execute()
-            profile['post_count'] = posts_result.count if posts_result.count is not None else 0
-
-        return profiles
+        return matching_profiles
 
     def sync_from_csv(self, csv_path: str = "data/input-data.csv") -> Dict[str, int]:
         """Import profiles from CSV file. Updates existing profiles by username.
@@ -250,7 +228,7 @@ class ProfileManager:
                     self.update_profile(
                         existing['profile_id'],
                         name=name,
-                        last_synced_at=datetime.now().isoformat()
+                        last_synced_at=datetime.now(timezone.utc).isoformat()
                     )
                     stats["updated"] += 1
                 else:
