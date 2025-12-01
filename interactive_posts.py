@@ -255,6 +255,7 @@ class PostDetailScreen(Screen):
         Binding("r", "show_raw", "Raw JSON"),
         Binding("i", "show_image", "View Image"),
         Binding("o", "open_url", "Open URL"),
+        Binding("u", "copy_urn", "Copy URN"),
         Binding("m", "mark_post", "Mark Post (Save)"),
         Binding("M", "mark_with_actions", "Mark with Actions", key_display="shift+m"),
     ]
@@ -293,6 +294,12 @@ class PostDetailScreen(Screen):
             f"[bold cyan]Name:[/bold cyan] {name}",
             f"[bold cyan]URL:[/bold cyan] {self.post_data.get('url', 'N/A')}",
         ]
+
+        # Add URN if available
+        urn = self.post_data.get('full_urn')
+        if urn:
+            lines.append(f"[bold cyan]Full URN:[/bold cyan] {urn}")
+            lines.append("[dim]Press 'u' to copy URN to clipboard[/dim]")
 
         # Add marked status
         if self.current_actions:
@@ -530,6 +537,24 @@ class PostDetailScreen(Screen):
         url = self.post_data.get("url")
         if url:
             subprocess.run(["open", url])
+
+    def action_copy_urn(self):
+        """Copy the full URN to clipboard."""
+        urn = self.post_data.get("full_urn")
+        if not urn:
+            self.notify("No URN available for this post", severity="warning")
+            return
+
+        try:
+            # Use pbcopy on macOS to copy to clipboard
+            process = subprocess.run(
+                ['pbcopy'],
+                input=urn.encode('utf-8'),
+                check=True
+            )
+            self.notify(f"URN copied to clipboard!", severity="information")
+        except Exception as e:
+            self.notify(f"Error copying to clipboard: {e}", severity="error")
 
     def action_mark_post(self):
         """Mark/unmark the current post with 'save' action only."""
@@ -855,7 +880,7 @@ class MainScreen(Screen):
                     # Batch query for all engagement history
                     if verbose:
                         self.notify(f"Loading engagement history for {len(post_ids)} posts...", timeout=10)
-                    history_result = client.table('data_downloads').select('post_id, downloaded_at, stats_json').in_('post_id', post_ids).order('post_id, downloaded_at').execute()
+                    history_result = client.table('data_downloads').select('post_id, downloaded_at, stats_json').in_('post_id', post_ids).order('post_id').order('downloaded_at').execute()
 
                     # Group engagement history by post_id
                     if verbose:
