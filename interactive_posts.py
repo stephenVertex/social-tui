@@ -289,9 +289,58 @@ class PostDetailScreen(Screen):
         self.websocket_port = websocket_port
 
     def on_mount(self) -> None:
-        """Send post data to websocket on screen mount."""
+        """Send post data to websocket on screen mount and lazy load engagement if needed."""
+        # Lazy load engagement history if not already loaded
+        if not self.post_data.get('_engagement_loaded', True):
+            self.app.run_worker(self.lazy_load_engagement, thread=True)
+
         if self.websocket_port:
             self.app.run_worker(self.send_to_websocket, thread=True)
+
+    async def lazy_load_engagement(self):
+        """Lazy load engagement history for this post on demand."""
+        post_id = self.post_data.get('post_id')
+        if not post_id:
+            return
+
+        try:
+            self.notify("Loading engagement history...", timeout=2)
+            from supabase_client import get_supabase_client
+            client = get_supabase_client()
+
+            # Fetch engagement history for this specific post
+            history_result = client.table('v_post_engagement_history').select(
+                'post_id, downloaded_at, reactions, comments, reposts, views, download_id'
+            ).eq('post_id', post_id).execute()
+
+            # Process and attach engagement history
+            engagement_history = []
+            for hist_row in history_result.data:
+                stats = {
+                    'reactions': hist_row.get('reactions', 0),
+                    'comments': hist_row.get('comments', 0),
+                    'reposts': hist_row.get('reposts', 0),
+                    'views': hist_row.get('views'),
+                    '_downloaded_at': hist_row.get('downloaded_at'),
+                    'download_id': hist_row.get('download_id')
+                }
+                engagement_history.append(stats)
+
+            # Sort and include virtual initial point for visualization
+            sorted_history = sorted(engagement_history, key=lambda x: x['_downloaded_at'])
+            self.post_data['engagement_history'] = sorted_history
+            self.post_data['_engagement_loaded'] = True
+
+            # Refresh the display
+            detail_widget = self.query_one("#post-detail", Static)
+            detail_widget.update(self._format_post())
+
+            if len(self.post_data['engagement_history']) > 0:
+                self.notify(f"Loaded {len(self.post_data['engagement_history'])} engagement snapshots", severity="information")
+
+        except Exception as e:
+            logger.error(f"Error lazy loading engagement for {post_id}: {e}")
+            self.notify(f"Error loading engagement: {e}", severity="error")
 
     async def send_to_websocket(self):
         """Send post data to the websocket server."""
@@ -368,29 +417,25 @@ class PostDetailScreen(Screen):
             lines.append(f"[bold cyan]Marked:[/bold cyan] No")
 
         # Add engagement data if available
-        # Check both 'stats' (current format) and 'engagement' (legacy/alternative format)
-        engagement = self.post_data.get("stats", self.post_data.get("engagement", {}))
         engagement_history = self.post_data.get("engagement_history", [])
 
-        if engagement or engagement_history:
+        if engagement_history:
             lines.append("")
             lines.append("[bold cyan]Engagement:[/bold cyan]")
 
-            # Check if we have historical data to show growth
-            if engagement_history and len(engagement_history) > 1:
-                # Use the latest historical snapshot as current if available
+            # Case 1: More than one snapshot, show historical trend
+            if len(engagement_history) > 1:
                 current = engagement_history[-1]
                 previous = engagement_history[-2]
 
-                # Display historical timeline table first
+                # Display historical timeline table
                 lines.append("")
                 lines.append("[bold]Historical Timeline:[/bold]")
                 lines.append("┌─────────────────────┬────────────┬──────────┬──────────┐")
                 lines.append("│ Date                │ Reactions  │ Comments │ Reposts  │")
                 lines.append("├─────────────────────┼────────────┼──────────┼──────────┤")
 
-                # Show up to 10 most recent snapshots
-                display_history = engagement_history[-10:] if len(engagement_history) > 10 else engagement_history
+                display_history = engagement_history[-10:]
                 for snapshot in display_history:
                     date_str = snapshot.get("_downloaded_at", "")
                     try:
@@ -402,7 +447,6 @@ class PostDetailScreen(Screen):
                     reactions = snapshot.get("reactions", 0)
                     comments = snapshot.get("comments", 0)
                     reposts = snapshot.get("reposts", 0)
-
                     lines.append(f"│ {date_display:<19} │ {reactions:>10} │ {comments:>8} │ {reposts:>8} │")
 
                 lines.append("└─────────────────────┴────────────┴──────────┴──────────┘")
@@ -414,82 +458,44 @@ class PostDetailScreen(Screen):
                 lines.append("│ Metric          │ Current  │ Change   │ Trend      │")
                 lines.append("├─────────────────┼──────────┼──────────┼────────────┤")
 
-                metric_keys = [
-                    ("Reactions", "reactions", None),
-                    ("Comments", "comments", None),
-                    ("Reposts", "reposts", "shares"),
-                ]
-
-                # Add views if available
+                metric_keys = [("Reactions", "reactions"), ("Comments", "comments"), ("Reposts", "reposts")]
                 if current.get("views") is not None:
-                    metric_keys.append(("Views", "views", None))
+                    metric_keys.append(("Views", "views"))
 
-                for metric_name, primary_key, fallback_key in metric_keys:
-                    current_val = current.get(primary_key, current.get(fallback_key, 0) if fallback_key else 0)
-                    prev_val = previous.get(primary_key, previous.get(fallback_key, 0) if fallback_key else 0)
-
+                for metric_name, key in metric_keys:
+                    current_val = current.get(key, 0)
+                    prev_val = previous.get(key, 0)
                     change = current_val - prev_val
                     change_str = f"+{change}" if change > 0 else str(change)
-
-                    # Create simple ASCII trend visualization
-                    if change > 0:
-                        trend = "↗ " + "▂" * min(int(change / max(prev_val, 1) * 10), 8)
-                    elif change < 0:
-                        trend = "↘ "
-                    else:
-                        trend = "→ "
-
+                    trend = "↗" if change > 0 else ("↘" if change < 0 else "→")
                     lines.append(f"│ {metric_name:<15} │ {current_val:>8} │ {change_str:>8} │ {trend:<10} │")
 
                 lines.append("└─────────────────┴──────────┴──────────┴────────────┘")
 
-                # Show overall statistics
-                lines.append("")
+                # Show time range and total change
                 first_snapshot = engagement_history[0]
                 last_snapshot = engagement_history[-1]
+                try:
+                    first_dt = datetime.fromisoformat(first_snapshot.get("_downloaded_at", "").replace('Z', '+00:00'))
+                    last_dt = datetime.fromisoformat(last_snapshot.get("_downloaded_at", "").replace('Z', '+00:00'))
+                    days_elapsed = (last_dt - first_dt).total_seconds() / 86400
+                    time_range = f"{first_dt.strftime('%b %d')} → {last_dt.strftime('%b %d %H:%M')}"
+                    lines.append(f"[dim]Tracked: {time_range} ({len(engagement_history)} snapshots over {days_elapsed:.1f} days)[/dim]")
+                except:
+                    lines.append(f"[dim]Tracked: {len(engagement_history)} snapshots[/dim]")
 
-                reactions_total_growth = last_snapshot.get("reactions", 0) - first_snapshot.get("reactions", 0)
-                comments_total_growth = last_snapshot.get("comments", 0) - first_snapshot.get("comments", 0)
-                reposts_total_growth = last_snapshot.get("reposts", 0) - first_snapshot.get("reposts", 0)
-
-                # Show time range
-                first_time = first_snapshot.get("_downloaded_at", "")
-                last_time = last_snapshot.get("_downloaded_at", "")
-                if first_time and last_time:
-                    try:
-                        first_dt = datetime.fromisoformat(first_time.replace('Z', '+00:00'))
-                        last_dt = datetime.fromisoformat(last_time.replace('Z', '+00:00'))
-                        days_elapsed = (last_dt - first_dt).total_seconds() / 86400
-                        time_range = f"{first_dt.strftime('%b %d')} → {last_dt.strftime('%b %d %H:%M')}"
-                        lines.append(f"[dim]Tracked: {time_range} ({len(engagement_history)} snapshots over {days_elapsed:.1f} days)[/dim]")
-                    except:
-                        lines.append(f"[dim]Tracked: {len(engagement_history)} snapshots[/dim]")
-
-                if reactions_total_growth != 0 or comments_total_growth != 0 or reposts_total_growth != 0:
-                    growth_parts = []
-                    if reactions_total_growth != 0:
-                        sign = "+" if reactions_total_growth > 0 else ""
-                        growth_parts.append(f"Reactions {sign}{reactions_total_growth}")
-                    if comments_total_growth != 0:
-                        sign = "+" if comments_total_growth > 0 else ""
-                        growth_parts.append(f"Comments {sign}{comments_total_growth}")
-                    if reposts_total_growth != 0:
-                        sign = "+" if reposts_total_growth > 0 else ""
-                        growth_parts.append(f"Reposts {sign}{reposts_total_growth}")
-                    lines.append(f"[dim]Total Change: {', '.join(growth_parts)}[/dim]")
-            elif engagement_history and len(engagement_history) == 1:
-                # Single historical snapshot - display as simple table
+            # Case 2: Exactly one snapshot, show a simple table
+            elif len(engagement_history) == 1:
                 snapshot = engagement_history[0]
                 lines.append("┌─────────────────┬──────────┐")
                 lines.append("│ Metric          │ Count    │")
                 lines.append("├─────────────────┼──────────┤")
 
                 metrics = [
-                    ("Reactions", snapshot.get("total_reactions", snapshot.get("reactions", 0))),
+                    ("Reactions", snapshot.get("reactions", 0)),
                     ("Comments", snapshot.get("comments", 0)),
                     ("Reposts", snapshot.get("reposts", 0)),
                 ]
-
                 if snapshot.get("views") is not None:
                     metrics.append(("Views", snapshot.get("views", 0)))
 
@@ -497,32 +503,15 @@ class PostDetailScreen(Screen):
                     lines.append(f"│ {metric_name:<15} │ {value:>8} │")
 
                 lines.append("└─────────────────┴──────────┘")
-
                 date_str = snapshot.get("_downloaded_at", "")
                 if date_str:
                     lines.append(f"[dim]Snapshot from: {date_str[:16]}[/dim]")
-            elif engagement:
-                # Display simple table from raw stats (no historical data)
-                lines.append("┌─────────────────┬──────────┐")
-                lines.append("│ Metric          │ Count    │")
-                lines.append("├─────────────────┼──────────┤")
-
-                # Display engagement metrics in a table format
-                metrics = [
-                    ("Reactions", engagement.get("total_reactions", engagement.get("reactions", engagement.get("likes", 0)))),
-                    ("Comments", engagement.get("comments", 0)),
-                    ("Reposts", engagement.get("reposts", engagement.get("shares", 0))),
-                ]
-
-                # Add views if available
-                if engagement.get("views") is not None:
-                    metrics.append(("Views", engagement.get("views", 0)))
-
-                for metric_name, value in metrics:
-                    lines.append(f"│ {metric_name:<15} │ {value:>8} │")
-
-                lines.append("└─────────────────┴──────────┘")
-                lines.append("[dim](No historical tracking data available)[/dim]")
+        
+        else:
+            # Case 3: No engagement history at all
+            lines.append("")
+            lines.append("[bold cyan]Engagement:[/bold cyan]")
+            lines.append("[dim]No engagement data available.[/dim]")
 
         lines.extend([
             "",
@@ -938,42 +927,62 @@ class MainScreen(Screen):
                 if verbose:
                     self.notify(f"Loaded {len(main_posts_data)} main posts, now loading engagement history...", timeout=10)
 
-                # Optimize: Load all engagement history in one query (avoid N+1 problem)
+                # Smart engagement loading: prefetch recent posts (last 15 days), lazy load old posts
                 post_ids = [row['post_id'] for row in main_posts_data if row.get('post_id')]
                 engagement_by_post = {}
 
-                # ALWAYS log this to verify debug output is working
                 logger.info("="*60)
-                logger.info("Starting engagement history load for main view")
+                logger.info("Starting smart engagement history load for main view")
                 logger.info(f"Total posts loaded for main view: {len(main_posts_data)}")
-                logger.info(f"Total post_ids extracted for engagement: {len(post_ids)}")
+                logger.info(f"Total post_ids extracted: {len(post_ids)}")
+
+                # Separate recent posts (last 15 days) from older posts
+                cutoff_date = datetime.now() - timedelta(days=15)
+                recent_post_ids = []
+                old_post_ids = []
+
+                for row in main_posts_data:
+                    post_id = row.get('post_id')
+                    if not post_id:
+                        continue
+
+                    # Use posted_at_formatted to determine post age (actual post date, not import date)
+                    posted_at = row.get('posted_at_formatted')
+                    if posted_at:
+                        try:
+                            # posted_at_formatted is like "2025-11-30 22:56:19"
+                            posted_at_dt = datetime.strptime(posted_at, "%Y-%m-%d %H:%M:%S")
+                            if posted_at_dt >= cutoff_date:
+                                recent_post_ids.append(post_id)
+                            else:
+                                old_post_ids.append(post_id)
+                        except:
+                            # If parsing fails, treat as old (will be lazy loaded)
+                            old_post_ids.append(post_id)
+                    else:
+                        old_post_ids.append(post_id)
+
+                logger.info(f"Recent posts (last 15 days): {len(recent_post_ids)}")
+                logger.info(f"Older posts (lazy load): {len(old_post_ids)}")
                 logger.info("="*60)
 
-                if post_ids:
-                    # Debug: Check if p-ed3f094d is in the post_ids list
-                    if 'p-ed3f094d' in post_ids:
-                        logger.info(f"p-ed3f094d IS in post_ids list (total: {len(post_ids)} posts)")
-                    else:
-                        logger.warning(f"p-ed3f094d NOT in post_ids list (total: {len(post_ids)} posts)")
-                        logger.debug(f"First 10 post_ids: {post_ids[:10]}")
-
-                    # Batch query for all engagement history
+                # Only prefetch engagement for recent posts
+                if recent_post_ids:
                     if verbose:
-                        self.notify(f"Loading engagement history for {len(post_ids)} posts...", timeout=10)
-                    history_result = client.table('v_post_engagement_history').select('post_id, downloaded_at, reactions, comments, reposts, views').in_('post_id', post_ids).execute()
+                        self.notify(f"Loading engagement history for {len(recent_post_ids)} recent posts...", timeout=10)
 
-                    logger.info(f"Query to post_engagement_history returned {len(history_result.data)} rows")
+                    # Fetch with a reasonable limit (recent posts won't have many snapshots)
+                    # Estimate ~5 snapshots per recent post max
+                    limit = len(recent_post_ids) * 5
+                    history_result = client.table('v_post_engagement_history').select(
+                        'post_id, downloaded_at, reactions, comments, reposts, views, download_id'
+                    ).in_('post_id', recent_post_ids).limit(limit).execute()
 
-                    # Check if p-ed3f094d is in the query results
-                    target_snapshots = [r for r in history_result.data if r.get('post_id') == 'p-ed3f094d']
-                    if target_snapshots:
-                        logger.info(f"✓ Found {len(target_snapshots)} snapshots for p-ed3f094d in final view")
-                    else:
-                        logger.warning(f"✗ No snapshots for p-ed3f094d in final view")
+                    logger.info(f"Query to post_engagement_history returned {len(history_result.data)} rows for recent posts")
 
                     # Group engagement history by post_id
                     if verbose:
-                        self.notify(f"Processing {len(history_result.data)} engagement snapshots from view...", timeout=5)
+                        self.notify(f"Processing {len(history_result.data)} engagement snapshots...", timeout=5)
                     for hist_row in history_result.data:
                         post_id = hist_row['post_id']
                         if post_id not in engagement_by_post:
@@ -981,11 +990,12 @@ class MainScreen(Screen):
 
                         # Data from the view is already parsed and cleaned
                         stats = {
-                            'total_reactions': hist_row.get('reactions', 0),
+                            'reactions': hist_row.get('reactions', 0),
                             'comments': hist_row.get('comments', 0),
                             'reposts': hist_row.get('reposts', 0),
                             'views': hist_row.get('views'),
-                            '_downloaded_at': hist_row.get('downloaded_at')
+                            '_downloaded_at': hist_row.get('downloaded_at'),
+                            'download_id': hist_row.get('download_id')
                         }
                         engagement_by_post[post_id].append(stats)
 
@@ -1011,21 +1021,19 @@ class MainScreen(Screen):
                     else:
                         post['_is_new'] = False
 
-                    # Attach pre-loaded engagement history
+                    # Attach pre-loaded engagement history (for recent posts)
+                    # For older posts, mark for lazy loading
                     if row['post_id'] and row['post_id'] in engagement_by_post:
                         # Sort the engagement history by timestamp to ensure correct order
                         sorted_history = sorted(engagement_by_post[row['post_id']], key=lambda x: x['_downloaded_at'])
+
+                        # Include the virtual 'zero point' for visualization
                         post['engagement_history'] = sorted_history
-                        # Debug logging for specific problematic post
-                        if row['post_id'] == 'p-ed3f094d':
-                            logger.info(f"✓ Attached {len(sorted_history)} snapshots to post p-ed3f094d (sorted)")
+                        post['_engagement_loaded'] = True
                     else:
-                        # Debug: Log when engagement history is NOT attached
-                        if row['post_id'] == 'p-ed3f094d':
-                            logger.error(f"✗ Did NOT attach engagement history to p-ed3f094d")
-                            logger.error(f"  row['post_id']: {row['post_id']}")
-                            logger.error(f"  post_id in engagement_by_post: {row['post_id'] in engagement_by_post}")
-                            logger.error(f"  engagement_by_post keys: {list(engagement_by_post.keys())[:10]}")
+                        # Mark as not loaded - will be fetched on demand when viewing post detail
+                        post['engagement_history'] = []
+                        post['_engagement_loaded'] = False
 
                     posts.append(post)
 
