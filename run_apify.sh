@@ -1,5 +1,20 @@
 #!/bin/bash
 
+# Accept optional directory parameter for retry
+# Usage: ./run_apify.sh [data_directory]
+if [ -n "$1" ]; then
+  # Use provided directory (for retry)
+  data_dir="$1"
+  echo "Using existing directory: $data_dir"
+else
+  # Create new timestamped directory
+  timestamp=$(date +"%Y%m%d_%H%M%S")
+  data_dir="data/${timestamp}/linkedin"
+  echo "Creating new directory: $data_dir"
+fi
+
+mkdir -p "$data_dir"
+
 # Read CSV file and process each username
 tail -n +2 data/input-data.csv | while IFS=, read -r name username; do
   # Strip carriage returns (for Windows-style line endings)
@@ -13,17 +28,12 @@ tail -n +2 data/input-data.csv | while IFS=, read -r name username; do
 
   # Get today's date in YYYY-MM-DD format
   today=$(date +"%Y-%m-%d")
-  today_compact=$(date +"%Y%m%d")
 
-  # Create data directory structure
-  data_dir="data/${today_compact}/linkedin"
-  mkdir -p "$data_dir"
-
-  # Check if a file already exists for this username today
-  existing_file=$(ls "${data_dir}/dataset_${username}_${today}_"*.json 2>/dev/null | head -n 1)
+  # Check if a file already exists for this username in this run
+  existing_file=$(ls "${data_dir}/dataset_${username}_"*.json 2>/dev/null | head -n 1)
 
   if [ -n "$existing_file" ]; then
-    echo "Skipping $username - already downloaded today: $existing_file"
+    echo "Skipping $username - already downloaded in this run: $existing_file"
     echo ""
     continue
   fi

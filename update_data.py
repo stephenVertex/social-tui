@@ -16,15 +16,18 @@ Usage:
 import argparse
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from supabase_client import get_supabase_client
 from manage_data import create_download_run, import_directory, complete_download_run
 
 
-def run_apify_scrape():
+def run_apify_scrape(data_dir=None):
     """Run the apify scraping script.
+
+    Args:
+        data_dir: Optional directory path to use (for retry). If None, creates new timestamped directory.
 
     Returns:
         True if successful, False otherwise
@@ -40,11 +43,19 @@ def run_apify_scrape():
 
     try:
         # Run the script and stream output
-        result = subprocess.run(
-            ["bash", str(script_path)],
-            check=True,
-            text=True
-        )
+        if data_dir:
+            print(f"Retrying with directory: {data_dir}")
+            result = subprocess.run(
+                ["bash", str(script_path), str(data_dir)],
+                check=True,
+                text=True
+            )
+        else:
+            result = subprocess.run(
+                ["bash", str(script_path)],
+                check=True,
+                text=True
+            )
         print("\n✓ Scraping completed successfully")
         return True
 
@@ -56,18 +67,115 @@ def run_apify_scrape():
         return False
 
 
+def get_most_recent_directory(date_filter=None):
+    """Get the most recent data directory path.
+
+    Args:
+        date_filter: Optional date string (YYYYMMDD) to filter directories. If None, gets most recent overall.
+
+    Returns:
+        Path object or None if no directory found
+    """
+    data_path = Path("data")
+    if not data_path.exists():
+        return None
+
+    # Find all directories matching the pattern
+    if date_filter:
+        # Look for directories starting with the date (both old and new formats)
+        pattern = f"{date_filter}*"
+    else:
+        # Look for all date directories (YYYYMMDD or YYYYMMDD_HHMMSS)
+        pattern = "*"
+
+    matching_dirs = []
+    for dir_path in data_path.glob(pattern):
+        if dir_path.is_dir():
+            linkedin_dir = dir_path / "linkedin"
+            if linkedin_dir.exists():
+                matching_dirs.append(linkedin_dir)
+
+    if not matching_dirs:
+        return None
+
+    # Sort by directory name (timestamp embedded in name) and return most recent
+    matching_dirs.sort(reverse=True)
+    return matching_dirs[0]
+
+
 def get_todays_directory():
-    """Get today's data directory path.
+    """Get today's most recent data directory path.
 
     Returns:
         Path object or None if directory doesn't exist
     """
-    today = datetime.now().strftime("%Y%m%d")
-    linkedin_dir = Path(f"data/{today}/linkedin")
+    today = datetime.now(timezone.utc).strftime("%Y%m%d")
+    return get_most_recent_directory(date_filter=today)
 
-    if linkedin_dir.exists():
-        return linkedin_dir
-    return None
+
+def get_last_run_time():
+    """Get the timestamp of the most recent run.
+
+    Returns:
+        datetime object or None if no runs found
+    """
+    most_recent = get_most_recent_directory()
+    if not most_recent:
+        return None
+
+    # Extract timestamp from directory path
+    # Format: data/YYYYMMDD_HHMMSS/linkedin or data/YYYYMMDD/linkedin
+    parent_name = most_recent.parent.name
+
+    try:
+        # Try new format: YYYYMMDD_HHMMSS
+        if "_" in parent_name:
+            timestamp_str = parent_name
+            return datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S").replace(tzinfo=timezone.utc)
+        else:
+            # Old format: YYYYMMDD (assume end of day)
+            return datetime.strptime(parent_name, "%Y%m%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def check_rate_limit(force=False):
+    """Check if the script was run recently and prompt user.
+
+    Args:
+        force: If True, skip the check
+
+    Returns:
+        True if should proceed, False if should exit
+    """
+    if force:
+        return True
+
+    last_run = get_last_run_time()
+    if not last_run:
+        return True
+
+    now = datetime.now(timezone.utc)
+    hours_since_last_run = (now - last_run).total_seconds() / 3600
+
+    if hours_since_last_run < 2:
+        print("\n" + "⚠" * 35)
+        print("WARNING: Rate Limit Check")
+        print("⚠" * 35)
+        print(f"\nLast run was {hours_since_last_run:.1f} hours ago at {last_run.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+        print("Running too frequently may abuse the Apify API.")
+        print("\nOptions:")
+        print("  1. Continue anyway")
+        print("  2. Cancel (recommended)")
+        print("  3. Use --force flag to bypass this check in the future")
+        print("  4. Use --retry to retry the last run instead")
+
+        response = input("\nDo you want to continue? (y/N): ").strip().lower()
+        if response not in ["y", "yes"]:
+            print("\nCancelled. Use --retry to retry the last run, or wait before running again.")
+            return False
+
+    return True
 
 
 def import_data(directory_path):
@@ -188,7 +296,9 @@ def main():
 Examples:
   python update_data.py                    # Full update (scrape + import + stats)
   python update_data.py --skip-scrape      # Import today's data only
-  python update_data.py --date 20251129    # Import specific date
+  python update_data.py --date 20251129    # Import specific date (most recent run)
+  python update_data.py --retry            # Retry most recent run (scrape missing + import)
+  python update_data.py --force            # Bypass 2-hour rate limit check
         """
     )
     parser.add_argument(
@@ -198,41 +308,86 @@ Examples:
     )
     parser.add_argument(
         "--date",
-        help="Import specific date directory (YYYYMMDD format)"
+        help="Import specific date directory (YYYYMMDD format, uses most recent run for that date)"
+    )
+    parser.add_argument(
+        "--retry",
+        action="store_true",
+        help="Retry the most recent run (scrape any missing files and import)"
     )
     parser.add_argument(
         "--no-stats",
         action="store_true",
         help="Skip statistics display at the end"
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force run without rate limit check (bypass 2-hour warning)"
+    )
 
     args = parser.parse_args()
+
+    # Validate arguments
+    if args.retry and args.date:
+        print("Error: Cannot use --retry and --date together")
+        sys.exit(1)
+    if args.retry and args.skip_scrape:
+        print("Error: Cannot use --retry and --skip-scrape together")
+        sys.exit(1)
 
     print("\n" + "=" * 70)
     print("Social-TUI Data Update")
     print("=" * 70)
 
+    # Check rate limit for new runs (not retry, not skip-scrape)
+    if not args.retry and not args.skip_scrape:
+        if not check_rate_limit(force=args.force):
+            sys.exit(0)
+
+    # Determine directory to use
+    retry_directory = None
+    if args.retry:
+        # Find most recent directory for retry
+        retry_directory = get_most_recent_directory()
+        if not retry_directory:
+            print("\nError: No existing data directories found to retry")
+            sys.exit(1)
+        print(f"\nRetrying most recent run: {retry_directory.parent}")
+
     # Step 1: Scrape (unless skipped)
     if not args.skip_scrape:
-        success = run_apify_scrape()
+        if args.retry:
+            # Retry: use existing directory
+            success = run_apify_scrape(data_dir=retry_directory)
+        else:
+            # Normal run: create new directory
+            success = run_apify_scrape()
+
         if not success:
             print("\nWarning: Scraping failed, but will attempt to import existing data")
     else:
         print("\nSkipping scrape step (--skip-scrape)")
 
     # Step 2: Import
-    if args.date:
-        # Import specific date
-        directory_path = Path(f"data/{args.date}/linkedin")
-        if not directory_path.exists():
-            print(f"\nError: Directory not found: {directory_path}")
+    if args.retry:
+        # Use the retry directory
+        directory_path = retry_directory
+    elif args.date:
+        # Import specific date (most recent run for that date)
+        directory_path = get_most_recent_directory(date_filter=args.date)
+        if not directory_path:
+            print(f"\nError: No data directory found for date: {args.date}")
+            print(f"Looked for directories matching: data/{args.date}*/linkedin")
             sys.exit(1)
+        print(f"\nUsing directory: {directory_path}")
     else:
-        # Import today's data
+        # Import today's data (most recent run for today)
         directory_path = get_todays_directory()
         if not directory_path:
-            today = datetime.now().strftime("%Y%m%d")
-            print(f"\nError: Today's data directory not found: data/{today}/linkedin")
+            today = datetime.now(timezone.utc).strftime("%Y%m%d")
+            print(f"\nError: Today's data directory not found")
+            print(f"Looked for directories matching: data/{today}*/linkedin")
             print("Run with --date YYYYMMDD to import a specific date")
             sys.exit(1)
 
