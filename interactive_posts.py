@@ -399,7 +399,7 @@ class PostDetailScreen(Screen):
                     except:
                         date_display = date_str[:16] if len(date_str) > 16 else date_str
 
-                    reactions = snapshot.get("total_reactions", snapshot.get("reactions", 0))
+                    reactions = snapshot.get("reactions", 0)
                     comments = snapshot.get("comments", 0)
                     reposts = snapshot.get("reposts", 0)
 
@@ -448,7 +448,7 @@ class PostDetailScreen(Screen):
                 first_snapshot = engagement_history[0]
                 last_snapshot = engagement_history[-1]
 
-                reactions_total_growth = last_snapshot.get("total_reactions", last_snapshot.get("reactions", 0)) - first_snapshot.get("total_reactions", first_snapshot.get("reactions", 0))
+                reactions_total_growth = last_snapshot.get("reactions", 0) - first_snapshot.get("reactions", 0)
                 comments_total_growth = last_snapshot.get("comments", 0) - first_snapshot.get("comments", 0)
                 reposts_total_growth = last_snapshot.get("reposts", 0) - first_snapshot.get("reposts", 0)
 
