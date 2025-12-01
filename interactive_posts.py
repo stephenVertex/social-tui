@@ -981,7 +981,7 @@ class MainScreen(Screen):
 
                         # Data from the view is already parsed and cleaned
                         stats = {
-                            'total_reactions': hist_row.get('total_reactions', 0),
+                            'total_reactions': hist_row.get('reactions', 0),
                             'comments': hist_row.get('comments', 0),
                             'reposts': hist_row.get('reposts', 0),
                             'views': hist_row.get('views'),
