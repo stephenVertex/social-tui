@@ -11,11 +11,17 @@ import glob
 import argparse
 import os
 import socket
+import logging
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from supabase_client import get_supabase_client
-from db_utils import generate_aws_id, PREFIX_POST, PREFIX_DOWNLOAD, PREFIX_RUN
+from db_utils import generate_aws_id, PREFIX_POST, PREFIX_DOWNLOAD, PREFIX_RUN, PREFIX_MEDIA
+from media_cache import download_and_cache_media, download_multiple_media
+
+# Setup logging
+logger = logging.getLogger(__name__)
 
 
 def get_post_urn(post):
@@ -50,12 +56,12 @@ def create_download_run(client, script_name="import", platform="linkedin"):
 
     client.table('download_runs').insert({
         'run_id': run_id,
-        'started_at': datetime.now().isoformat(),
+        'started_at': datetime.now(timezone.utc).isoformat(),
         'status': 'running',
         'script_name': script_name,
         'platform': platform,
         'system_info': system_info,
-        'created_at': datetime.now().isoformat()
+        'created_at': datetime.now(timezone.utc).isoformat()
     }).execute()
 
     return run_id
@@ -73,13 +79,135 @@ def complete_download_run(client, run_id, stats, error_message=None):
     status = 'failed' if error_message or stats['errors'] > 0 else 'completed'
 
     client.table('download_runs').update({
-        'completed_at': datetime.now().isoformat(),
+        'completed_at': datetime.now(timezone.utc).isoformat(),
         'status': status,
         'posts_fetched': stats.get('processed', 0),
         'posts_new': stats.get('new', 0),
         'posts_updated': 0,  # posts_updated - we don't update in this version
         'error_message': error_message
     }).eq('run_id', run_id).execute()
+
+
+def extract_and_store_media(client, post_id: str, post_data: dict) -> dict:
+    """
+    Extract media from post JSON and create post_media records.
+
+    Args:
+        client: Supabase client
+        post_id: The post's ID
+        post_data: Full post JSON data
+
+    Returns:
+        Dictionary with media extraction statistics:
+            - media_ids: List of created media_ids
+            - media_count: Number of media items processed
+            - media_cached: Number of media items successfully cached
+            - media_errors: Number of media items that failed
+    """
+    stats = {
+        'media_ids': [],
+        'media_count': 0,
+        'media_cached': 0,
+        'media_errors': 0
+    }
+
+    media = post_data.get('media', {})
+
+    if not media or not media.get('type'):
+        return stats
+
+    media_urls = []
+
+    # Extract URLs based on media type
+    if media.get('type') == 'image' and media.get('url'):
+        media_urls.append({
+            'url': media['url'],
+            'type': 'image'
+        })
+    elif media.get('type') == 'images':
+        for img in media.get('images', []):
+            url = img.get('url')
+            if url:
+                media_urls.append({
+                    'url': url,
+                    'type': 'image'
+                })
+    elif media.get('type') == 'video' and media.get('url'):
+        media_urls.append({
+            'url': media['url'],
+            'type': 'video'
+        })
+
+    if not media_urls:
+        return stats
+
+    stats['media_count'] = len(media_urls)
+
+    # Download and cache media (sequentially for now to avoid overwhelming the system)
+    for media_item in media_urls:
+        url = media_item['url']
+        media_type = media_item['type']
+
+        try:
+            # Check if this media URL already exists for this post
+            existing_result = client.table('post_media').select('media_id').eq(
+                'post_id', post_id
+            ).eq('media_url', url).execute()
+
+            if existing_result.data:
+                logger.debug(f"Media already exists for post {post_id}: {url[:50]}...")
+                stats['media_ids'].append(existing_result.data[0]['media_id'])
+                stats['media_cached'] += 1
+                continue
+
+            # Download and cache the media
+            logger.info(f"Downloading media for post {post_id}: {url[:50]}...")
+            result = download_and_cache_media(url, media_type=media_type, timeout=30)
+
+            # Create media_id
+            media_id = generate_aws_id(PREFIX_MEDIA)
+
+            # Initialize ai_analysis_log
+            ai_log = [{
+                'timestamp': datetime.now(timezone.utc).isoformat(),
+                'event': 'media_downloaded',
+                'status': 'success',
+                'details': {
+                    'file_size': result['file_size'],
+                    'mime_type': result.get('mime_type'),
+                    'md5_sum': result['md5_sum']
+                }
+            }]
+
+            # Insert into post_media table
+            client.table('post_media').insert({
+                'media_id': media_id,
+                'post_id': post_id,
+                'media_type': result['media_type'],
+                'media_url': url,
+                'local_file_path': str(result['local_path']),
+                'md5_sum': result['md5_sum'],
+                'file_size': result['file_size'],
+                'mime_type': result.get('mime_type'),
+                'width': result.get('width'),
+                'height': result.get('height'),
+                'ai_analysis_status': 'not_started',
+                'ai_analysis_log': json.dumps(ai_log),
+                'created_at': datetime.now(timezone.utc).isoformat(),
+                'updated_at': datetime.now(timezone.utc).isoformat()
+            }).execute()
+
+            stats['media_ids'].append(media_id)
+            stats['media_cached'] += 1
+            logger.info(f"  ✓ Cached media {media_id}: {result['md5_sum'][:8]}... ({result['file_size']:,} bytes)")
+
+        except Exception as e:
+            logger.error(f"  ✗ Error processing media {url[:50]}...: {e}")
+            stats['media_errors'] += 1
+            # Don't fail the entire import for media errors
+            continue
+
+    return stats
 
 
 def import_directory(client, directory, run_id=None):
@@ -105,7 +233,10 @@ def import_directory(client, directory, run_id=None):
         "processed": 0,
         "new": 0,
         "duplicates": 0,
-        "errors": 0
+        "errors": 0,
+        "media_total": 0,
+        "media_cached": 0,
+        "media_errors": 0
     }
 
     for fpath in files:
@@ -137,6 +268,16 @@ def import_directory(client, directory, run_id=None):
                     # Post exists - create a new data_download entry for time-series
                     post_id = existing[0]['post_id']
                     stats["duplicates"] += 1
+
+                    # Extract and store media for existing posts (if not already stored)
+                    try:
+                        media_stats = extract_and_store_media(client, post_id, post)
+                        stats["media_total"] += media_stats['media_count']
+                        stats["media_cached"] += media_stats['media_cached']
+                        stats["media_errors"] += media_stats['media_errors']
+                    except Exception as e:
+                        logger.debug(f"Error extracting media for existing post {urn}: {e}")
+                        # Don't fail for media errors on existing posts
                 else:
                     # New post - create post and data_download
                     post_id = generate_aws_id(PREFIX_POST)
@@ -162,13 +303,26 @@ def import_directory(client, directory, run_id=None):
                             'post_type': post_type,
                             'url': url,
                             'raw_json': json.dumps(post),
-                            'first_seen_at': datetime.now().isoformat(),
+                            'first_seen_at': datetime.now(timezone.utc).isoformat(),
                             'is_read': False,
                             'is_marked': False,
-                            'created_at': datetime.now().isoformat(),
-                            'updated_at': datetime.now().isoformat()
+                            'created_at': datetime.now(timezone.utc).isoformat(),
+                            'updated_at': datetime.now(timezone.utc).isoformat()
                         }).execute()
                         stats["new"] += 1
+
+                        # Extract and store media for new posts
+                        try:
+                            media_stats = extract_and_store_media(client, post_id, post)
+                            stats["media_total"] += media_stats['media_count']
+                            stats["media_cached"] += media_stats['media_cached']
+                            stats["media_errors"] += media_stats['media_errors']
+                            if media_stats['media_cached'] > 0:
+                                print(f"  └─ Cached {media_stats['media_cached']} media item(s)")
+                        except Exception as e:
+                            logger.error(f"Error extracting media for post {urn}: {e}")
+                            # Don't fail the post import for media errors
+
                     except Exception as e:
                         print(f"Error inserting post {urn}: {e}")
                         stats["errors"] += 1
@@ -186,12 +340,12 @@ def import_directory(client, directory, run_id=None):
                         'download_id': download_id,
                         'post_id': post_id,
                         'run_id': run_id,
-                        'downloaded_at': datetime.now().isoformat(),
+                        'downloaded_at': datetime.now(timezone.utc).isoformat(),
                         'total_reactions': total_reactions,
                         'stats_json': json.dumps(stats_data),
                         'raw_json': json.dumps(post),
                         'source_file_path': fpath,
-                        'created_at': datetime.now().isoformat()
+                        'created_at': datetime.now(timezone.utc).isoformat()
                     }).execute()
                 except Exception as e:
                     print(f"Error creating data_download for {urn}: {e}")
@@ -234,6 +388,10 @@ def main():
                 print(f"New:        {stats['new']}")
                 print(f"Duplicates: {stats['duplicates']}")
                 print(f"Errors:     {stats['errors']}")
+                print(f"\nMedia:")
+                print(f"  Found:    {stats['media_total']}")
+                print(f"  Cached:   {stats['media_cached']}")
+                print(f"  Errors:   {stats['media_errors']}")
             else:
                 print(f"Error: Directory not found: {args.directory}")
 

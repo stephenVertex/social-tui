@@ -223,6 +223,10 @@ def import_data(directory_path):
         print(f"  New:        {stats['new']}")
         print(f"  Duplicates: {stats['duplicates']}")
         print(f"  Errors:     {stats['errors']}")
+        print(f"\n  Media:")
+        print(f"    Found:    {stats.get('media_total', 0)}")
+        print(f"    Cached:   {stats.get('media_cached', 0)}")
+        print(f"    Errors:   {stats.get('media_errors', 0)}")
         print("\n✓ Import completed successfully")
 
         return stats
