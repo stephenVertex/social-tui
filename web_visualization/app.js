@@ -82,9 +82,17 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Engagement Chart
         if (data.engagement_history && data.engagement_history.length > 0) {
-            const labels = data.engagement_history.map(e => new Date(e._downloaded_at).toLocaleString());
-            const reactions = data.engagement_history.map(e => e.total_reactions || e.reactions || 0);
-            
+            // Create datasets with x-y coordinates for proper time-based spacing
+            const commentsData = data.engagement_history.map(e => ({
+                x: new Date(e._downloaded_at),
+                y: e.comments || 0
+            }));
+
+            const reactionsData = data.engagement_history.map(e => ({
+                x: new Date(e._downloaded_at),
+                y: e.reactions || 0
+            }));
+
             if (engagementChart) {
                 engagementChart.destroy();
             }
@@ -92,32 +100,71 @@ document.addEventListener('DOMContentLoaded', () => {
             engagementChart = new Chart(chartCanvas, {
                 type: 'line',
                 data: {
-                    labels: labels,
-                    datasets: [{
-                        label: 'Total Reactions',
-                        data: reactions,
-                        borderColor: 'rgba(24, 119, 242, 1)',
-                        backgroundColor: 'rgba(24, 119, 242, 0.2)',
-                        fill: true,
-                        tension: 0.1
-                    }]
+                    datasets: [
+                        {
+                            label: 'Reactions',
+                            data: reactionsData,
+                            borderColor: 'rgba(24, 119, 242, 1)',
+                            backgroundColor: 'rgba(24, 119, 242, 0.2)',
+                            fill: true,
+                            tension: 0.1
+                        },
+                        {
+                            label: 'Comments',
+                            data: commentsData,
+                            borderColor: 'rgba(76, 175, 80, 1)',
+                            backgroundColor: 'rgba(76, 175, 80, 0.2)',
+                            fill: true,
+                            tension: 0.1
+                        }
+                    ]
                 },
                 options: {
                     responsive: true,
                     scales: {
                         x: {
+                            type: 'time',
+                            time: {
+                                unit: 'day',
+                                displayFormats: {
+                                    day: 'MMM d',
+                                    hour: 'MMM d HH:mm'
+                                },
+                                tooltipFormat: 'MMM d, yyyy HH:mm'
+                            },
                             title: {
                                 display: true,
                                 text: 'Date'
+                            },
+                            ticks: {
+                                source: 'auto',
+                                autoSkip: true,
+                                maxRotation: 45,
+                                minRotation: 0
                             }
                         },
                         y: {
                             title: {
                                 display: true,
-                                text: 'Reactions'
+                                text: 'Count'
                             },
                             beginAtZero: true
                         }
+                    },
+                    plugins: {
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false
+                        },
+                        legend: {
+                            display: true,
+                            position: 'top'
+                        }
+                    },
+                    interaction: {
+                        mode: 'nearest',
+                        axis: 'x',
+                        intersect: false
                     }
                 }
             });
