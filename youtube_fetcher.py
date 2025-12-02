@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from supabase_client import get_supabase_client
+from media_cache import download_and_cache_media
 
 load_dotenv()
 
@@ -140,7 +141,7 @@ def insert_new_video(client, video_data, channel):
         'urn': video_id,
         'full_urn': f"youtube:video:{video_id}",
         'platform': 'youtube',
-        'posted_at_timestamp': int(published_at.timestamp()),
+        'posted_at_timestamp': int(published_at.timestamp() * 1000),
         'author_username': channel.get('username'),
         'text_content': f"{video_data['snippet'].get('title', '')}\n\n{video_data['snippet'].get('description', '')}",
         'url': f"https://www.youtube.com/watch?v={video_id}",
@@ -148,16 +149,51 @@ def insert_new_video(client, video_data, channel):
         'first_seen_at': datetime.now(timezone.utc).isoformat(),
     }
     
-    media_id = f"pm-{uuid.uuid4().hex[:8]}"
-    thumbnail_url = video_data['snippet']['thumbnails'].get('high', {}).get('url')
+    media_records = []
     
-    media_record = {
-        'media_id': media_id,
+    # 1. Video Media Record
+    media_id_video = f"pm-{uuid.uuid4().hex[:8]}"
+    media_record_video = {
+        'media_id': media_id_video,
         'post_id': post_id,
         'media_type': 'video',
         'media_url': f"https://www.youtube.com/watch?v={video_id}",
-        'local_file_path': thumbnail_url,
+        'local_file_path': None,
     }
+    media_records.append(media_record_video)
+
+    # 2. Thumbnail Media Record
+    thumbnail_url = video_data['snippet']['thumbnails'].get('high', {}).get('url')
+    if thumbnail_url:
+        try:
+            print(f"    - Downloading thumbnail: {thumbnail_url}")
+            # Download and cache the thumbnail
+            cache_result = download_and_cache_media(thumbnail_url, media_type='image')
+            
+            media_id_thumb = f"pm-{uuid.uuid4().hex[:8]}"
+            media_record_thumb = {
+                'media_id': media_id_thumb,
+                'post_id': post_id,
+                'media_type': 'image',
+                'media_url': thumbnail_url,
+                'local_file_path': str(cache_result['local_path']),
+                'width': cache_result.get('width'),
+                'height': cache_result.get('height')
+            }
+            media_records.append(media_record_thumb)
+        except Exception as e:
+            print(f"    - Error downloading thumbnail: {e}")
+            # If download fails, we can optionally insert it without local path or skip
+            # For now, let's insert it without local path so we at least have the URL
+            media_id_thumb = f"pm-{uuid.uuid4().hex[:8]}"
+            media_record_thumb = {
+                'media_id': media_id_thumb,
+                'post_id': post_id,
+                'media_type': 'image',
+                'media_url': thumbnail_url,
+                'local_file_path': None
+            }
+            media_records.append(media_record_thumb)
 
     # Create a record for the time-series data
     download_id = f"d-{uuid.uuid4().hex[:8]}"
@@ -175,7 +211,8 @@ def insert_new_video(client, video_data, channel):
     
     try:
         client.table('posts').insert(post_record).execute()
-        client.table('post_media').insert(media_record).execute()
+        if media_records:
+            client.table('post_media').insert(media_records).execute()
         client.table('data_downloads').insert(data_download_record).execute()
         return True
     except Exception as e:
