@@ -811,12 +811,20 @@ class MainScreen(Screen):
         background: darkgreen;
     }
 
-    #filter-input {
+    #filter-options-popup {
         dock: top;
-        height: 3;
-        border: solid yellow;
-        display: none;
+        height: auto;
+        width: 60;
+        background: $surface-darken-1;
+        border: thick $accent;
+        padding: 1 2;
+        display: none; /* Initially hidden */
+        color: $text;
+        text-align: left;
+        margin-left: 2;
+        margin-top: 1;
     }
+
     
     #status-bar {
         dock: top;
@@ -862,11 +870,14 @@ class MainScreen(Screen):
         self.filter_locked = False
         self._filter_timer = None
         self.show_new_only = False
+        self.prefix_mode_active = False # New: Tracks if C-u prefix mode is active
+        self.current_filter_type = None # New: Stores the type of filter being applied (e.g., 'username', 'platform', 'content')
 
     def compose(self) -> ComposeResult:
         """Create child widgets for the app."""
         yield Header()
         yield Input(placeholder="Type to filter posts...", id="filter-input")
+        yield Static(id="filter-options-popup", markup=True)
         yield Static(id="status-bar")
         yield DataTable(cursor_type="row")
         yield Footer()
@@ -1063,8 +1074,19 @@ class MainScreen(Screen):
         """Update the status bar with post counts."""
         status_bar = self.query_one("#status-bar", Static)
         filter_status = " (New Only)" if self.show_new_only else ""
-        if self.filter_text:
-            filter_status += f" (Filter: '{self.filter_text}')"
+        if self.filter_active and self.filter_text:
+            if self.current_filter_type == "username":
+                filter_status += f" (User: '{self.filter_text}')"
+            elif self.current_filter_type == "platform":
+                filter_status += f" (Platform: '{self.filter_text}')"
+            elif self.current_filter_type == "min_date":
+                filter_status += f" (Min Date: '{self.filter_text}')"
+            elif self.current_filter_type == "max_date":
+                filter_status += f" (Max Date: '{self.filter_text}')"
+            elif self.current_filter_type == "min_engagements":
+                filter_status += f" (Min Engagements: '{self.filter_text}')"
+            else: # Default content filter
+                filter_status += f" (Filter: '{self.filter_text}')"
             
         status_bar.update(f"Showing {count} of {total} posts{filter_status}")
 
@@ -1256,6 +1278,10 @@ class MainScreen(Screen):
         filter_input.value = ""
         self.filter_text = ""
 
+        # Ensure the filter options popup is hidden when regular filter mode starts
+        filter_options_popup = self.query_one("#filter-options-popup", Static)
+        filter_options_popup.styles.display = "none"
+
     def action_toggle_new_only(self):
         """Toggle showing only new posts."""
         if not self.use_db:
@@ -1287,15 +1313,79 @@ class MainScreen(Screen):
             table.focus()
 
     def on_key(self, event: events.Key) -> None:
-        """Handle key events for ESC to clear filter."""
-        if event.key == "escape" and self.filter_active:
+        """Handle key events for ESC to clear filter, and C-u for filter prefixes."""
+        filter_options_popup = self.query_one("#filter-options-popup", Static)
+        filter_input = self.query_one("#filter-input", Input)
+
+        if event.key == "ctrl+u":
+            self.prefix_mode_active = True
+            # Display the filter options popup
+            menu_text = """
+[bold]Filter options:[/bold]
+ u - username (fuzzy match)
+ p - platform (e.g., linkedin, twitter)
+ c - content (full text search)
+ d - min date (YYYY-MM-DD)
+ D - max date (YYYY-MM-DD)
+ r - min engagements (number)
+ [dim](ESC to cancel)[/dim]
+            """
+            filter_options_popup.update(menu_text.strip())
+            filter_options_popup.styles.display = "block"
+            # self.notify("Prefix mode active. Enter filter type (u, p, c, d, D, r)...", severity="information", timeout=3)
+            event.prevent_default()
+            event.stop()
+        elif self.prefix_mode_active:
+            # filter_input = self.query_one("#filter-input", Input)
+            filter_options_popup.styles.display = "none" # Hide popup after a key is pressed
+
+            if event.key == "u":
+                self.current_filter_type = "username"
+                filter_input.placeholder = "Filter by username (fuzzy match)..."
+                self.notify("Username filter active. Type username.", severity="information", timeout=2)
+            elif event.key == "p":
+                self.current_filter_type = "platform"
+                filter_input.placeholder = "Filter by platform (e.g., linkedin, youtube)..."
+                self.notify("Platform filter active. Type platform.", severity="information", timeout=2)
+            elif event.key == "c":
+                self.current_filter_type = "content"
+                filter_input.placeholder = "Filter by content (full text search)..."
+                self.notify("Content filter active. Type content.", severity="information", timeout=2)
+            elif event.key == "d":
+                self.current_filter_type = "min_date"
+                filter_input.placeholder = "Filter by minimum date (YYYY-MM-DD)..."
+                self.notify("Minimum date filter active. Type date.", severity="information", timeout=2)
+            elif event.key == "D":
+                self.current_filter_type = "max_date"
+                filter_input.placeholder = "Filter by maximum date (YYYY-MM-DD)..."
+                self.notify("Maximum date filter active. Type date.", severity="information", timeout=2)
+            elif event.key == "r":
+                self.current_filter_type = "min_engagements"
+                filter_input.placeholder = "Filter by minimum engagements (number)..."
+                self.notify("Minimum engagements filter active. Type number.", severity="information", timeout=2)
+            elif event.key == "escape": # Allow escape to cancel prefix mode
+                self.prefix_mode_active = False
+                self.current_filter_type = None
+                self.notify("Prefix mode cancelled.", severity="information", timeout=2)
+                filter_input.placeholder = "Type to filter posts..." # Reset placeholder
+                event.prevent_default()
+                event.stop()
+                return # Don't start filter if prefix mode is cancelled with escape
+
+            self.prefix_mode_active = False # Exit prefix mode after a valid key
+            self.action_start_filter() # Activate the filter input with the new placeholder
+            event.prevent_default()
+            event.stop()
+        elif event.key == "escape" and self.filter_active:
             # Clear the filter
             self.filter_active = False
             self.filter_locked = False
             self.filter_text = ""
-            filter_input = self.query_one("#filter-input", Input)
+            self.current_filter_type = None # Also clear the filter type
+            # filter_input = self.query_one("#filter-input", Input)
             filter_input.styles.display = "none"
             filter_input.value = ""
+            filter_input.placeholder = "Type to filter posts..." # Reset placeholder
             self.apply_filter()
             table = self.query_one(DataTable)
             table.focus()
@@ -1365,18 +1455,85 @@ class MainScreen(Screen):
                 self._add_post_to_table(idx, post, table)
             count = len(self.posts)
         else:
-            # Use simple substring matching for speed
             filter_lower = self.filter_text.lower()
 
             for idx, post in enumerate(self.posts):
-                searchable = post.get("_searchable", "")
+                filter_match = False # Assume no match initially
 
-                # Simple substring match (very fast)
-                if filter_lower in searchable:
+                if self.current_filter_type == "username":
+                    username = post.get("author_username", "").lower()
+                    if filter_lower in username:
+                        filter_match = True
+                elif self.current_filter_type == "platform":
+                    platform = post.get("platform", "").lower()
+                    if filter_lower in platform:
+                        filter_match = True
+                elif self.current_filter_type == "min_date":
+                    try:
+                        # Convert filter text to datetime object
+                        filter_date = datetime.strptime(self.filter_text, "%Y-%m-%d")
+                        post_date_str = post.get("posted_at_formatted", "")
+                        if post_date_str:
+                            # Parse post date, ignore time for min_date comparison
+                            post_date = datetime.strptime(post_date_str.split(" ")[0], "%Y-%m-%d")
+                            if post_date >= filter_date:
+                                filter_match = True
+                    except ValueError:
+                        self.notify(f"Invalid min date format: {self.filter_text}. Use YYYY-MM-DD.", severity="error")
+                        # If date is invalid, no posts match this filter until corrected
+                        continue 
+                elif self.current_filter_type == "max_date":
+                    try:
+                        filter_date = datetime.strptime(self.filter_text, "%Y-%m-%d")
+                        post_date_str = post.get("posted_at_formatted", "")
+                        if post_date_str:
+                            post_date = datetime.strptime(post_date_str.split(" ")[0], "%Y-%m-%d")
+                            if post_date <= filter_date:
+                                filter_match = True
+                    except ValueError:
+                        self.notify(f"Invalid max date format: {self.filter_text}. Use YYYY-MM-DD.", severity="error")
+                        continue
+                elif self.current_filter_type == "min_engagements":
+                    try:
+                        min_engagements = int(self.filter_text)
+                        # Sum reactions, comments, reposts from the latest snapshot
+                        engagement_history = post.get("engagement_history", [])
+                        if engagement_history:
+                            latest_snapshot = engagement_history[-1]
+                            total_engagements = (
+                                latest_snapshot.get("reactions", 0) +
+                                latest_snapshot.get("comments", 0) +
+                                latest_snapshot.get("reposts", 0)
+                            )
+                            if total_engagements >= min_engagements:
+                                filter_match = True
+                        elif min_engagements == 0: # If no engagement history, it matches if min_engagements is 0
+                            filter_match = True
+                    except ValueError:
+                        self.notify(f"Invalid minimum engagements number: {self.filter_text}. Enter an integer.", severity="error")
+                        continue
+                else: # Default content filter or if current_filter_type is not recognized/None
+                    searchable = post.get("_searchable", "")
+                    if filter_lower in searchable:
+                        filter_match = True
+
+                if filter_match:
                     self._add_post_to_table(idx, post, table)
                     count += 1
                     
         self.update_status_bar(count, len(self.posts))
+
+    def _add_post_to_table(self, idx: int, post: dict, table: DataTable):
+        """Helper to add a single post to the DataTable."""
+        date_str = post.get("posted_at_formatted", "")
+        username = post.get("author_username", "")
+        text_preview = post.get("text_preview", "")
+        media_indicator = post.get("media_indicator", "")
+        marked_indicator = post.get("marked_indicator", "")
+        new_indicator = "🆕" if post.get("_is_new") else ""
+
+        row_key = table.add_row(date_str, username, text_preview, media_indicator, marked_indicator, new_indicator)
+        self.post_index_map[row_key] = idx
 
 
     def action_quit_with_todos(self):
