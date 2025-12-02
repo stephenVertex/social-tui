@@ -14,6 +14,7 @@ wheels/
 
 # Data files
 data/
+data
 input-data.csv
 
 # Supabase
@@ -24,6 +25,7 @@ supabase/.temp
 
 # Cache files
 cache/
+cache
 
 # Test artifacts
 .agent/
