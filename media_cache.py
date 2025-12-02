@@ -116,12 +116,37 @@ def get_extension_from_url(url: str) -> str:
     parsed = urlparse(url)
     path = parsed.path.lower()
 
-    # Try to get extension from path
+    # Try to get extension from path (look for extension at end of path before query params)
     for ext in EXT_TO_MEDIA_TYPE.keys():
-        if ext in path:
+        if path.endswith(ext):
             return ext
 
     return '.bin'
+
+
+def get_extension_from_mime(mime_type: str) -> str:
+    """
+    Get file extension from MIME type.
+
+    Args:
+        mime_type: MIME type (e.g., 'image/jpeg')
+
+    Returns:
+        File extension with leading dot (e.g., '.jpg')
+    """
+    mime_to_ext = {
+        'image/jpeg': '.jpg',
+        'image/jpg': '.jpg',
+        'image/png': '.png',
+        'image/gif': '.gif',
+        'image/webp': '.webp',
+        'image/svg+xml': '.svg',
+        'video/mp4': '.mp4',
+        'video/webm': '.webm',
+        'video/quicktime': '.mov',
+        'application/pdf': '.pdf',
+    }
+    return mime_to_ext.get(mime_type.lower(), '.bin')
 
 
 def detect_media_type(url: str, mime_type: Optional[str] = None) -> str:
@@ -282,8 +307,8 @@ def download_and_cache_media(
         if not media_type:
             media_type = detect_media_type(media_url, mime_type)
 
-        # Get extension
-        extension = get_extension_from_url(media_url)
+        # Get extension (prefer MIME type, fall back to URL)
+        extension = get_extension_from_mime(mime_type) if mime_type else get_extension_from_url(media_url)
 
         # Get cache path
         cache_path = get_media_cache_path(media_type, md5_sum, extension)
