@@ -3,6 +3,7 @@ import asyncio
 import json
 import websockets
 from datetime import datetime
+from pathlib import Path
 
 # Keep track of connected clients
 connected_clients = set()
@@ -47,8 +48,19 @@ async def main():
     Start the websocket server.
     """
     host = "127.0.0.1"
+
+    # Read port from config file, fallback to 8765
     port = 8765
-    
+    config_file = Path(__file__).parent / "ws_config.json"
+    if config_file.exists():
+        try:
+            with open(config_file) as f:
+                config = json.load(f)
+                port = config.get("port", 8765)
+        except Exception as e:
+            print(f"Warning: Could not read ws_config.json: {e}")
+            print("Using default port 8765")
+
     print("="*50)
     print("Attempting to start WebSocket server...")
     print(f"  Host: {host}")

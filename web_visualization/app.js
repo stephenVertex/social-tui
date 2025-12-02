@@ -11,8 +11,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let engagementChart = null;
 
-    function connectWebSocket() {
-        const socket = new WebSocket('ws://127.0.0.1:8765');
+    async function loadConfig() {
+        try {
+            const response = await fetch('ws_config.json');
+            const config = await response.json();
+            return config.port || 8765;
+        } catch {
+            return 8765;  // Fallback to default
+        }
+    }
+
+    async function connectWebSocket() {
+        const port = await loadConfig();
+        const socket = new WebSocket(`ws://127.0.0.1:${port}`);
 
         socket.onopen = () => {
             console.log('WebSocket connection established');
