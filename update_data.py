@@ -5,12 +5,14 @@ Unified data update script for social-tui.
 This script:
 1. Runs run_apify.sh to scrape latest LinkedIn data
 2. Imports the scraped data into Supabase database
-3. Shows updated statistics
+3. Uploads newly cached media to S3
+4. Shows updated statistics
 
 Usage:
-    python update_data.py
-    python update_data.py --skip-scrape  # Only import existing data
-    python update_data.py --date 20251129  # Import specific date
+    python update_data.py                    # Full update
+    python update_data.py --skip-scrape      # Only import existing data
+    python update_data.py --skip-s3-upload   # Skip S3 upload
+    python update_data.py --date 20251129    # Import specific date
 """
 
 import argparse
@@ -21,6 +23,7 @@ from pathlib import Path
 
 from supabase_client import get_supabase_client
 from manage_data import create_download_run, import_directory, complete_download_run
+from scripts.s3_upload.upload_to_s3 import upload_media_to_s3
 
 
 def run_apify_scrape(data_dir=None):
@@ -238,10 +241,41 @@ def import_data(directory_path):
         return None
 
 
+def upload_to_s3():
+    """Upload newly cached media to S3."""
+    print("\n" + "=" * 70)
+    print("Step 3: Uploading Media to S3")
+    print("=" * 70)
+
+    try:
+        stats = upload_media_to_s3(dry_run=False, batch_size=50)
+
+        if stats['uploads_attempted'] > 0:
+            print(f"\nS3 Upload Summary:")
+            print(f"  Files Found:     {stats['files_found']}")
+            print(f"  Uploads:         {stats['uploads_successful']}/{stats['uploads_attempted']}")
+            print(f"  DB Updates:      {stats['db_updates_successful']}/{stats['uploads_successful']}")
+
+            if stats['uploads_failed'] > 0 or stats['db_updates_failed'] > 0:
+                print(f"\n⚠ Some uploads had errors (see logs above)")
+            else:
+                print(f"\n✓ S3 upload completed successfully")
+        else:
+            print("\n✓ No new media to upload")
+
+        return stats
+
+    except Exception as e:
+        print(f"\n✗ S3 upload failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
 def show_statistics():
     """Display database statistics."""
     print("\n" + "=" * 70)
-    print("Step 3: Database Statistics")
+    print("Step 4: Database Statistics")
     print("=" * 70)
 
     try:
@@ -294,15 +328,16 @@ def show_statistics():
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Update social-tui data (scrape + import + stats)",
+        description="Update social-tui data (scrape + import + S3 upload + stats)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python update_data.py                    # Full update (scrape + import + stats)
-  python update_data.py --skip-scrape      # Import today's data only
-  python update_data.py --date 20251129    # Import specific date (most recent run)
-  python update_data.py --retry            # Retry most recent run (scrape missing + import)
-  python update_data.py --force            # Bypass 2-hour rate limit check
+  python update_data.py                      # Full update (scrape + import + S3 + stats)
+  python update_data.py --skip-scrape        # Import today's data only (+ S3 + stats)
+  python update_data.py --skip-s3-upload     # Update without S3 upload
+  python update_data.py --date 20251129      # Import specific date (most recent run)
+  python update_data.py --retry              # Retry most recent run (scrape missing + import)
+  python update_data.py --force              # Bypass 2-hour rate limit check
         """
     )
     parser.add_argument(
@@ -323,6 +358,11 @@ Examples:
         "--no-stats",
         action="store_true",
         help="Skip statistics display at the end"
+    )
+    parser.add_argument(
+        "--skip-s3-upload",
+        action="store_true",
+        help="Skip S3 upload of newly cached media"
     )
     parser.add_argument(
         "--force",
@@ -400,7 +440,15 @@ Examples:
         print("\n✗ Update failed")
         sys.exit(1)
 
-    # Step 3: Stats (unless skipped)
+    # Step 3: Upload to S3 (unless skipped)
+    if not args.skip_s3_upload:
+        s3_stats = upload_to_s3()
+        if s3_stats is None:
+            print("\n⚠ S3 upload failed, but continuing...")
+    else:
+        print("\nSkipping S3 upload (--skip-s3-upload)")
+
+    # Step 4: Stats (unless skipped)
     if not args.no_stats:
         show_statistics()
 
