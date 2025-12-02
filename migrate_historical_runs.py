@@ -15,7 +15,7 @@ import glob
 import json
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from db_utils import generate_aws_id, PREFIX_DOWNLOAD, PREFIX_RUN
@@ -96,7 +96,7 @@ def create_historical_run(conn, date_str, directory):
         'run_apify.sh',
         'linkedin',
         system_info,
-        datetime.now().isoformat()
+        datetime.now(timezone.utc).isoformat()
     ))
 
     conn.commit()
@@ -186,7 +186,7 @@ def import_historical_directory(conn, directory, run_id, run_date):
                         json.dumps(stats_data),
                         json.dumps(post),
                         fpath,
-                        datetime.now().isoformat()
+                        datetime.now(timezone.utc).isoformat()
                     ))
                     stats["downloads_created"] += 1
                 except sqlite3.IntegrityError as e:

@@ -35,3 +35,18 @@ schema_postgres.sql
 schema_postgres_ready.sql
 cleanup_test_data.py
 test_*.py
+
+# macOS
+.DS_Store
+
+# AI assistant files
+.gemini/
+.gemini-clipboard/
+
+# MCP config files
+.mcp.json
+supabase-mcp-config.json
+supabase_mcp_cmd.txt
+
+# Log files
+log/

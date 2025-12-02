@@ -21,11 +21,16 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         socket.onmessage = (event) => {
-            console.log('Message from server ', event.data);
+            console.log('[WebSocket] Raw message received, length:', event.data.length);
             const message = JSON.parse(event.data);
+            console.log('[WebSocket] Parsed message:', message);
+            console.log('[WebSocket] Message type:', message.type);
 
             if (message.type === 'post_detail') {
+                console.log('[WebSocket] Post detail message detected, calling updatePostDetails...');
                 updatePostDetails(message.data);
+            } else {
+                console.log('[WebSocket] Unknown message type:', message.type);
             }
         };
 
@@ -44,9 +49,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updatePostDetails(data) {
+        console.log('[updatePostDetails] Received data:', data);
+
         welcomeDiv.classList.add('hidden');
         postDetailsDiv.classList.remove('hidden');
-        
+
         const author = data.author || {};
         let name = author.name;
         if (!name) {
@@ -55,7 +62,7 @@ document.addEventListener('DOMContentLoaded', () => {
         postAuthor.textContent = `${name} (@${author.username || 'N/A'})`;
         postUrl.href = data.url || '#';
         postText.textContent = data.text || 'No text available.';
-        
+
         // Media
         postMedia.innerHTML = '';
         const media = data.media;
@@ -79,9 +86,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 postMedia.appendChild(video);
             }
         }
-        
+
         // Engagement Chart
+        console.log('[updatePostDetails] Checking engagement_history...');
+        console.log('  - engagement_history exists?', !!data.engagement_history);
+        console.log('  - engagement_history length:', data.engagement_history ? data.engagement_history.length : 'N/A');
+        console.log('  - engagement_history data:', data.engagement_history);
+
         if (data.engagement_history && data.engagement_history.length > 0) {
+            console.log('[updatePostDetails] Processing engagement history for chart...');
             // Create datasets with x-y coordinates for proper time-based spacing
             const commentsData = data.engagement_history.map(e => ({
                 x: new Date(e._downloaded_at),
@@ -93,10 +106,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 y: e.reactions || 0
             }));
 
+            console.log('[updatePostDetails] Prepared chart data:');
+            console.log('  - Comments data points:', commentsData.length);
+            console.log('  - Comments data:', commentsData);
+            console.log('  - Reactions data points:', reactionsData.length);
+            console.log('  - Reactions data:', reactionsData);
+
             if (engagementChart) {
+                console.log('[updatePostDetails] Destroying existing chart...');
                 engagementChart.destroy();
             }
 
+            console.log('[updatePostDetails] Creating new chart...');
             engagementChart = new Chart(chartCanvas, {
                 type: 'line',
                 data: {
@@ -168,12 +189,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 }
             });
+            console.log('[updatePostDetails] Chart created successfully!');
         } else {
-             if (engagementChart) {
+            console.log('[updatePostDetails] No engagement history data - skipping chart');
+            if (engagementChart) {
+                console.log('[updatePostDetails] Destroying existing chart (no data)...');
                 engagementChart.destroy();
                 engagementChart = null;
             }
         }
+        console.log('[updatePostDetails] Finished updating post details');
     }
 
     connectWebSocket();

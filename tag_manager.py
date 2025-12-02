@@ -1,6 +1,6 @@
 """Tag management for social-tui profiles with AWS-style identifiers."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Optional, Any
 
 from supabase_client import get_supabase_client
@@ -59,7 +59,7 @@ class TagManager:
             'name': name,
             'description': description,
             'color': color,
-            'created_at': datetime.now().isoformat()
+            'created_at': datetime.now(timezone.utc).isoformat()
         }).execute()
 
         return tag_id
@@ -205,7 +205,7 @@ class TagManager:
                 'profile_tag_id': profile_tag_id,
                 'profile_id': profile_id,
                 'tag_id': tag_id,
-                'created_at': datetime.now().isoformat()
+                'created_at': datetime.now(timezone.utc).isoformat()
             }).execute()
 
             return True
@@ -281,7 +281,7 @@ class TagManager:
                     'profile_tag_id': profile_tag_id,
                     'profile_id': profile_id,
                     'tag_id': tag_id,
-                    'created_at': datetime.now().isoformat()
+                    'created_at': datetime.now(timezone.utc).isoformat()
                 })
 
             self.client.table('profile_tags').insert(new_tags).execute()

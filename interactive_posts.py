@@ -15,7 +15,7 @@ import hashlib
 import subprocess
 import logging
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from supabase_client import get_supabase_client
 from textual.app import App, ComposeResult
 from textual.widgets import DataTable, Footer, Header, Static, Input, Checkbox
@@ -937,7 +937,7 @@ class MainScreen(Screen):
                 logger.info(f"Total post_ids extracted: {len(post_ids)}")
 
                 # Separate recent posts (last 15 days) from older posts
-                cutoff_date = datetime.now() - timedelta(days=15)
+                cutoff_date = datetime.now(timezone.utc) - timedelta(days=15)
                 recent_post_ids = []
                 old_post_ids = []
 
@@ -1127,7 +1127,7 @@ class MainScreen(Screen):
         if actions:
             self.marked_posts[post_idx] = {
                 "actions": actions,
-                "timestamp": datetime.now()
+                "timestamp": datetime.now(timezone.utc)
             }
         elif post_idx in self.marked_posts:
             del self.marked_posts[post_idx]
@@ -1159,7 +1159,7 @@ class MainScreen(Screen):
                         # Mark with 'save' action only
                         self.marked_posts[post_idx] = {
                             "actions": {'s'},
-                            "timestamp": datetime.now()
+                            "timestamp": datetime.now(timezone.utc)
                         }
                         table.update_cell(row_key, "marked", self._format_actions_display({'s'}))
 
@@ -1194,7 +1194,7 @@ class MainScreen(Screen):
                         if selected_actions:
                             self.marked_posts[post_idx] = {
                                 "actions": selected_actions,
-                                "timestamp": datetime.now()
+                                "timestamp": datetime.now(timezone.utc)
                             }
                             table.update_cell(row_key, "marked", self._format_actions_display(selected_actions))
                         elif post_idx in self.marked_posts:
@@ -1323,7 +1323,7 @@ class MainScreen(Screen):
         # Create export structure
         export_data = {
             "search": {
-                "date": datetime.now().isoformat(),
+                "date": datetime.now(timezone.utc).isoformat(),
                 "query_string": self.filter_text if self.filter_active else ""
             },
             "matching_elements": marked_posts_data
@@ -1334,7 +1334,7 @@ class MainScreen(Screen):
         output_dir.mkdir(exist_ok=True)
 
         # Generate filename
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         filename = output_dir / f"marked_posts_{timestamp}.json"
 
         try:

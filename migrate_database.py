@@ -12,7 +12,7 @@ import sqlite3
 import json
 import argparse
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Tuple, Optional
 import sys
 
@@ -303,8 +303,8 @@ class DatabaseMigration:
                     post_id, urn, full_urn, platform, posted_at,
                     author, text, post_type, url, json_data,
                     first_seen, is_read, is_marked,
-                    datetime.now().isoformat(),
-                    datetime.now().isoformat()
+                    datetime.now(timezone.utc).isoformat(),
+                    datetime.now(timezone.utc).isoformat()
                 ))
 
                 self.stats["posts"]["migrated"] += 1

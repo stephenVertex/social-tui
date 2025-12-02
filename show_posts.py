@@ -6,7 +6,7 @@ Display LinkedIn posts from JSON files in a formatted table.
 import json
 import glob
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from rich.console import Console
 from rich.table import Table
 
@@ -40,7 +40,7 @@ def main():
     posts = load_posts(data_dir)
 
     # Calculate date threshold (30 days ago)
-    thirty_days_ago = datetime.now() - timedelta(days=30)
+    thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
 
     # Extract relevant data and filter by date
     post_data = []
