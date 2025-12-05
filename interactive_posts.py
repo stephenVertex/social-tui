@@ -795,6 +795,516 @@ class ActionModal(Screen):
         self.dismiss(self.selected_actions)
 
 
+class RunHistoryScreen(Screen):
+    """Screen to show download run history."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss", "Back", priority=True),
+        Binding("r", "refresh", "Refresh"),
+        Binding("s", "show_stats", "Stats"),
+        Binding("j", "cursor_down", "Down", show=False),
+        Binding("k", "cursor_up", "Up", show=False),
+    ]
+
+    def __init__(self, project_id: str = None):
+        super().__init__()
+        self.project_id = project_id
+        self.runs = []
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Static(id="summary-bar")
+        yield DataTable(cursor_type="row")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        """Setup table and load data."""
+        table = self.query_one(DataTable)
+        table.add_column("Date/Time", key="datetime")
+        table.add_column("Status", key="status")
+        table.add_column("Posts", key="posts")
+        table.add_column("New", key="new")
+        table.add_column("Snaps", key="snaps")
+        table.add_column("Duration", key="duration")
+
+        self.load_runs()
+        table.focus()
+
+    def load_runs(self):
+        """Load and display run history."""
+        try:
+            client = get_supabase_client()
+
+            # Use Supabase RPC function to execute custom SQL
+            # This assumes an RPC function exists, or we do it via table queries
+            result = client.table('download_runs').select(
+                'run_id, started_at, completed_at, status, script_name, platform, '
+                'posts_fetched, posts_new, posts_updated, error_message, system_info'
+            ).order('started_at', desc=True).execute()
+
+            # Manually calculate snapshot counts for each run
+            self.runs = []
+            for run in result.data:
+                snapshot_result = client.table('data_downloads').select(
+                    'download_id, post_id', count='exact'
+                ).eq('run_id', run['run_id']).execute()
+
+                run['snapshot_count'] = snapshot_result.count or 0
+                # Get unique post count
+                unique_posts = set()
+                for item in snapshot_result.data:
+                    if item.get('post_id'):
+                        unique_posts.add(item['post_id'])
+                run['unique_posts_tracked'] = len(unique_posts)
+
+                # Calculate duration
+                if run['completed_at'] and run['started_at']:
+                    try:
+                        started = datetime.fromisoformat(run['started_at'].replace('Z', '+00:00'))
+                        completed = datetime.fromisoformat(run['completed_at'].replace('Z', '+00:00'))
+                        run['duration_seconds'] = (completed - started).total_seconds()
+                    except:
+                        run['duration_seconds'] = None
+                else:
+                    run['duration_seconds'] = None
+
+                self.runs.append(run)
+
+            # Calculate summary statistics
+            total = len(self.runs)
+            completed = sum(1 for r in self.runs if r['status'] == 'completed')
+            failed = sum(1 for r in self.runs if r['status'] == 'failed')
+            avg_posts = sum(r['posts_fetched'] or 0 for r in self.runs) / total if total > 0 else 0
+
+            # Update summary bar
+            summary = self.query_one("#summary-bar", Static)
+            summary.update(
+                f"Summary: {total} total runs │ {completed} completed │ "
+                f"{failed} failed │ Avg: {avg_posts:.0f} posts/run"
+            )
+
+            # Populate table
+            table = self.query_one(DataTable)
+            table.clear()
+
+            for run in self.runs:
+                self._add_run_to_table(run, table)
+
+        except Exception as e:
+            self.notify(f"Error loading runs: {e}", severity="error")
+            logger.error(f"Error loading runs: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _add_run_to_table(self, run: dict, table: DataTable):
+        """Add a single run to the table."""
+        # Format datetime
+        started_at = run.get('started_at', '')
+        if started_at:
+            try:
+                dt = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
+                dt_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+            except:
+                dt_str = started_at[:19] if len(started_at) > 19 else started_at
+        else:
+            dt_str = "N/A"
+
+        # Format status with emoji
+        status_map = {
+            'completed': '✓ Done',
+            'failed': '✗ Failed',
+            'running': '⟳ Running'
+        }
+        status = status_map.get(run.get('status'), run.get('status', 'N/A'))
+
+        # Format duration
+        duration = self._format_duration(run.get('duration_seconds'))
+
+        table.add_row(
+            dt_str,
+            status,
+            str(run.get('posts_fetched', 0)),
+            str(run.get('posts_new', 0)),
+            str(run.get('snapshot_count', 0)),
+            duration
+        )
+
+    def _format_duration(self, seconds: float) -> str:
+        """Format duration in human-readable format."""
+        if seconds is None:
+            return "N/A"
+
+        if seconds < 60:
+            return f"{seconds:.1f}s"
+        elif seconds < 3600:
+            mins = int(seconds // 60)
+            secs = int(seconds % 60)
+            return f"{mins}m {secs:2d}s"
+        else:
+            hours = int(seconds // 3600)
+            mins = int((seconds % 3600) // 60)
+            return f"{hours}h {mins:2d}m"
+
+    def on_data_table_row_selected(self, event):
+        """Handle row selection to show run details."""
+        if event.cursor_row < len(self.runs):
+            run = self.runs[event.cursor_row]
+            self.app.push_screen(RunDetailScreen(run))
+
+    def action_refresh(self):
+        """Refresh the run list."""
+        self.load_runs()
+        self.notify("Run list refreshed", timeout=2)
+
+    def action_show_stats(self):
+        """Show statistics dashboard."""
+        self.app.push_screen(RunStatisticsScreen(self.project_id))
+
+    def action_cursor_down(self):
+        """Move cursor down."""
+        table = self.query_one(DataTable)
+        table.action_cursor_down()
+
+    def action_cursor_up(self):
+        """Move cursor up."""
+        table = self.query_one(DataTable)
+        table.action_cursor_up()
+
+    def action_dismiss(self):
+        """Return to main screen."""
+        self.app.pop_screen()
+
+
+class RunDetailScreen(Screen):
+    """Screen to show details of a specific run."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss", "Back", priority=True),
+        Binding("c", "copy_run_id", "Copy Run ID"),
+    ]
+
+    def __init__(self, run_data: dict):
+        super().__init__()
+        self.run_data = run_data
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield VerticalScroll(
+            Static(self._format_run_details(), id="run-detail")
+        )
+        yield Footer()
+
+    def _format_run_details(self) -> str:
+        """Format run data for display."""
+        run = self.run_data
+
+        # Parse system_info JSON
+        system_info = {}
+        if run.get('system_info'):
+            try:
+                system_info = json.loads(run['system_info'])
+            except:
+                pass
+
+        # Format timestamps
+        started_at = run.get('started_at', '')
+        completed_at = run.get('completed_at', '')
+
+        started = None
+        completed = None
+
+        if started_at:
+            try:
+                started = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
+            except:
+                pass
+
+        if completed_at:
+            try:
+                completed = datetime.fromisoformat(completed_at.replace('Z', '+00:00'))
+            except:
+                pass
+
+        # Calculate stats
+        duration_seconds = run.get('duration_seconds', 0) or 0
+        posts_fetched = run.get('posts_fetched', 0) or 0
+        posts_per_sec = posts_fetched / duration_seconds if duration_seconds > 0 else 0
+        sec_per_post = duration_seconds / posts_fetched if posts_fetched > 0 else 0
+        new_pct = (run.get('posts_new', 0) / posts_fetched * 100) if posts_fetched > 0 else 0
+
+        lines = [
+            f"[bold cyan]Run ID:[/bold cyan] {run.get('run_id', 'N/A')}",
+        ]
+
+        if started:
+            lines.append(f"[bold cyan]Started:[/bold cyan] {started.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+
+        if completed:
+            lines.append(f"[bold cyan]Completed:[/bold cyan] {completed.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+            lines.append(f"[bold cyan]Duration:[/bold cyan] {self._format_duration(duration_seconds)}")
+
+        status_display = {
+            'completed': '✓ Completed',
+            'failed': '✗ Failed',
+            'running': '⟳ Running'
+        }.get(run.get('status'), run.get('status', 'Unknown'))
+
+        lines.append(f"[bold cyan]Status:[/bold cyan] {status_display}")
+        lines.append("")
+        lines.append("─" * 76)
+        lines.append("")
+        lines.append("[bold]Data Collection:[/bold]")
+        lines.append(f"  Platform:         {run.get('platform', 'N/A').title()}")
+        lines.append(f"  Script:           {run.get('script_name', 'N/A')}")
+        lines.append(f"  Posts Fetched:    {posts_fetched} posts")
+        lines.append(f"  New Posts:        {run.get('posts_new', 0)} posts ({new_pct:.1f}%)")
+        lines.append(f"  Updated Posts:    {run.get('posts_updated', 0)} posts")
+        lines.append(f"  Snapshots:        {run.get('snapshot_count', 0)} engagement snapshots")
+        lines.append(f"  Unique Posts:     {run.get('unique_posts_tracked', 0)} posts tracked")
+
+        if system_info:
+            lines.append("")
+            lines.append("[bold]System Info:[/bold]")
+            if 'hostname' in system_info:
+                lines.append(f"  Hostname:         {system_info['hostname']}")
+
+        if duration_seconds > 0 and posts_fetched > 0:
+            lines.append("")
+            lines.append("[bold]Performance:[/bold]")
+            lines.append(f"  Posts/second:     {posts_per_sec:.1f} posts/sec")
+            lines.append(f"  Avg time/post:    {sec_per_post:.2f} seconds")
+
+        if run.get('error_message'):
+            lines.append("")
+            lines.append("[bold red]Error:[/bold red]")
+            lines.append(f"  {run['error_message']}")
+
+        return "\n".join(lines)
+
+    def _format_duration(self, seconds: float) -> str:
+        """Format duration string."""
+        if seconds < 60:
+            return f"{seconds:.1f} seconds"
+        elif seconds < 3600:
+            mins = int(seconds // 60)
+            secs = int(seconds % 60)
+            return f"{mins} minute{'s' if mins != 1 else ''} {secs} seconds"
+        else:
+            hours = int(seconds // 3600)
+            mins = int((seconds % 3600) // 60)
+            return f"{hours} hour{'s' if hours != 1 else ''} {mins} minutes"
+
+    def action_copy_run_id(self):
+        """Copy run ID to clipboard."""
+        run_id = self.run_data.get('run_id')
+        if not run_id:
+            self.notify("No run ID available", severity="warning")
+            return
+
+        try:
+            subprocess.run(
+                ['pbcopy'],
+                input=run_id.encode('utf-8'),
+                check=True
+            )
+            self.notify("Run ID copied to clipboard!", severity="information")
+        except Exception as e:
+            self.notify(f"Error copying to clipboard: {e}", severity="error")
+
+    def action_dismiss(self):
+        """Return to run history."""
+        self.app.pop_screen()
+
+
+class RunStatisticsScreen(Screen):
+    """Screen to show aggregate statistics across all runs."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss", "Back", priority=True),
+    ]
+
+    def __init__(self, project_id: str = None):
+        super().__init__()
+        self.project_id = project_id
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield VerticalScroll(
+            Static(self._format_statistics(), id="statistics")
+        )
+        yield Footer()
+
+    def on_mount(self):
+        """Load statistics on mount."""
+        try:
+            client = get_supabase_client()
+
+            # Fetch all runs to calculate statistics
+            all_runs_result = client.table('download_runs').select(
+                'run_id, started_at, completed_at, status, platform, posts_fetched, posts_new'
+            ).execute()
+
+            all_runs = all_runs_result.data
+            total_runs = len(all_runs)
+
+            # Calculate statistics manually
+            stats = {
+                'total_runs': total_runs,
+                'completed_runs': sum(1 for r in all_runs if r.get('status') == 'completed'),
+                'failed_runs': sum(1 for r in all_runs if r.get('status') == 'failed'),
+                'running_runs': sum(1 for r in all_runs if r.get('status') == 'running'),
+                'total_posts_fetched': sum(r.get('posts_fetched', 0) or 0 for r in all_runs),
+                'total_new_posts': sum(r.get('posts_new', 0) or 0 for r in all_runs),
+                'avg_posts_per_run': sum(r.get('posts_fetched', 0) or 0 for r in all_runs) / total_runs if total_runs > 0 else 0,
+                'max_posts_in_run': max((r.get('posts_fetched', 0) or 0 for r in all_runs), default=0),
+                'min_posts_in_run': min((r.get('posts_fetched', 0) or 0 for r in all_runs if r.get('posts_fetched')), default=0),
+            }
+
+            # Calculate duration statistics
+            durations = []
+            for r in all_runs:
+                if r.get('completed_at') and r.get('started_at'):
+                    try:
+                        started = datetime.fromisoformat(r['started_at'].replace('Z', '+00:00'))
+                        completed = datetime.fromisoformat(r['completed_at'].replace('Z', '+00:00'))
+                        durations.append((completed - started).total_seconds())
+                    except:
+                        pass
+
+            stats['avg_duration_seconds'] = sum(durations) / len(durations) if durations else 0
+            stats['max_duration_seconds'] = max(durations) if durations else 0
+            stats['min_duration_seconds'] = min(durations) if durations else 0
+
+            # Find last run and last success
+            sorted_runs = sorted(all_runs, key=lambda r: r.get('started_at', ''), reverse=True)
+            stats['last_run_at'] = sorted_runs[0].get('started_at') if sorted_runs else None
+
+            completed_runs = [r for r in sorted_runs if r.get('status') == 'completed']
+            stats['last_success_at'] = completed_runs[0].get('started_at') if completed_runs else None
+
+            # Calculate runs in last 24h and 7d
+            now = datetime.now(timezone.utc)
+            day_ago = now - timedelta(hours=24)
+            week_ago = now - timedelta(days=7)
+
+            stats['runs_24h'] = sum(1 for r in all_runs if r.get('started_at') and
+                                   datetime.fromisoformat(r['started_at'].replace('Z', '+00:00')) > day_ago)
+            stats['runs_7d'] = sum(1 for r in all_runs if r.get('started_at') and
+                                  datetime.fromisoformat(r['started_at'].replace('Z', '+00:00')) > week_ago)
+
+            # Calculate platform breakdown
+            platform_counts = {}
+            platform_posts = {}
+            for r in all_runs:
+                platform = r.get('platform', 'unknown')
+                platform_counts[platform] = platform_counts.get(platform, 0) + 1
+                platform_posts[platform] = platform_posts.get(platform, 0) + (r.get('posts_fetched', 0) or 0)
+
+            platforms = [{'platform': p, 'run_count': platform_counts[p], 'total_posts': platform_posts[p]}
+                        for p in platform_counts]
+            platforms.sort(key=lambda x: x['run_count'], reverse=True)
+
+            display = self.query_one("#statistics", Static)
+            display.update(self._format_statistics(stats, platforms))
+        except Exception as e:
+            self.notify(f"Error loading statistics: {e}", severity="error")
+            logger.error(f"Error loading statistics: {e}")
+
+    def _format_statistics(self, stats: dict = None, platforms: list = None) -> str:
+        """Format statistics for display."""
+        if not stats:
+            return "Loading statistics..."
+
+        # Calculate percentages
+        total = stats.get('total_runs', 0)
+        success_pct = (stats.get('completed_runs', 0) / total * 100) if total > 0 else 0
+        fail_pct = (stats.get('failed_runs', 0) / total * 100) if total > 0 else 0
+
+        # Format last run time
+        last_run = "Never"
+        last_run_at = stats.get('last_run_at')
+        if last_run_at:
+            try:
+                last_run_dt = datetime.fromisoformat(last_run_at.replace('Z', '+00:00'))
+                now = datetime.now(timezone.utc)
+                delta = now - last_run_dt
+                last_run = self._format_relative_time(delta)
+            except:
+                last_run = str(last_run_at)[:19]
+
+        lines = [
+            "[bold]Overall Performance:[/bold]",
+            f"  Total Runs:           {stats.get('total_runs', 0)}",
+            f"  Successful:           {stats.get('completed_runs', 0)} ({success_pct:.1f}%)",
+            f"  Failed:               {stats.get('failed_runs', 0)} ({fail_pct:.1f}%)",
+            f"  Currently Running:    {stats.get('running_runs', 0)}",
+            "",
+            "[bold]Post Collection:[/bold]",
+            f"  Total Posts Fetched:  {stats.get('total_posts_fetched', 0):,} posts",
+            f"  Total New Posts:      {stats.get('total_new_posts', 0):,} posts",
+            f"  Average per Run:      {stats.get('avg_posts_per_run', 0):.0f} posts",
+            f"  Max in Single Run:    {stats.get('max_posts_in_run', 0)} posts",
+            f"  Min in Single Run:    {stats.get('min_posts_in_run', 0)} posts",
+            "",
+        ]
+
+        if platforms:
+            lines.append("[bold]Platform Breakdown:[/bold]")
+            for p in platforms:
+                pct = (p['run_count'] / total * 100) if total > 0 else 0
+                platform_name = p.get('platform', 'unknown').title()
+                lines.append(f"  {platform_name:<15} {p['run_count']} runs ({pct:.0f}%)")
+            lines.append("")
+
+        lines.extend([
+            "[bold]Timing:[/bold]",
+            f"  Average Duration:     {self._format_duration_short(stats.get('avg_duration_seconds'))}",
+            f"  Fastest Run:          {self._format_duration_short(stats.get('min_duration_seconds'))}",
+            f"  Slowest Run:          {self._format_duration_short(stats.get('max_duration_seconds'))}",
+            "",
+            "[bold]Recent Activity:[/bold]",
+            f"  Last Run:             {last_run}",
+            f"  Runs Last 24h:        {stats.get('runs_24h', 0)}",
+            f"  Runs Last 7d:         {stats.get('runs_7d', 0)}",
+        ])
+
+        return "\n".join(lines)
+
+    def _format_duration_short(self, seconds: float) -> str:
+        """Format duration in short format."""
+        if seconds is None:
+            return "N/A"
+        if seconds < 60:
+            return f"{seconds:.1f}s"
+        elif seconds < 3600:
+            mins = int(seconds // 60)
+            secs = int(seconds % 60)
+            return f"{mins}m {secs}s"
+        else:
+            hours = int(seconds // 3600)
+            mins = int((seconds % 3600) // 60)
+            return f"{hours}h {mins}m"
+
+    def _format_relative_time(self, delta: timedelta) -> str:
+        """Format a time delta as relative time."""
+        seconds = delta.total_seconds()
+        if seconds < 60:
+            return "just now"
+        elif seconds < 3600:
+            mins = int(seconds // 60)
+            return f"{mins} minute{'s' if mins != 1 else ''} ago"
+        elif seconds < 86400:
+            hours = int(seconds // 3600)
+            return f"{hours} hour{'s' if hours != 1 else ''} ago"
+        else:
+            days = int(seconds // 86400)
+            return f"{days} day{'s' if days != 1 else ''} ago"
+
+    def action_dismiss(self):
+        """Return to run history."""
+        self.app.pop_screen()
+
+
 class MainScreen(Screen):
     """Main screen for the LinkedIn posts viewer."""
 
@@ -825,7 +1335,7 @@ class MainScreen(Screen):
         margin-top: 1;
     }
 
-    
+
     #status-bar {
         dock: top;
         height: 1;
@@ -833,7 +1343,7 @@ class MainScreen(Screen):
         color: $text;
         padding: 0 1;
     }
-    
+
     #controls {
         dock: top;
         height: 3;
@@ -846,6 +1356,7 @@ class MainScreen(Screen):
         Binding("q", "quit_with_todos", "Quit & Show TODOs", priority=True),
         Binding("t", "view_todos", "View TODOs", priority=True),
         Binding("p", "show_profiles", "Manage Profiles"),
+        Binding("h", "show_run_history", "Run History"),
         Binding("m", "mark_post", "Mark Post (Save)"),
         Binding("M", "mark_with_actions", "Mark with Actions", key_display="shift+m"),
         Binding("o", "open_url", "Open URL"),
@@ -1248,6 +1759,14 @@ class MainScreen(Screen):
         # Use the same database path as the posts
         db_path = self.data_source if self.use_db else "data/posts.db"
         self.app.push_screen(ProfileManagementScreen(db_path))
+
+    def action_show_run_history(self):
+        """Show run history screen."""
+        if not self.use_db:
+            self.notify("Run history only available with database backend", severity="warning")
+            return
+
+        self.app.push_screen(RunHistoryScreen())
 
     def action_open_url(self):
         """Open the URL of the currently selected post in the default browser."""
