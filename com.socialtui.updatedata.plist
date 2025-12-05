@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Unique label for the job -->
+    <key>Label</key>
+    <string>com.socialtui.updatedata</string>
+
+    <!-- Program to run -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/stephen/dev/social-tui-dev/main/update_data.py</string>
+    </array>
+
+    <!-- Working directory -->
+    <key>WorkingDirectory</key>
+    <string>/Users/stephen/dev/social-tui-dev/main</string>
+
+    <!-- Run every 6 hours (21600 seconds) -->
+    <key>StartInterval</key>
+    <integer>21600</integer>
+
+    <!-- Also run on load (first time) -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Standard output log -->
+    <key>StandardOutPath</key>
+    <string>/Users/stephen/dev/social-tui-dev/main/logs/update_data.log</string>
+
+    <!-- Standard error log -->
+    <key>StandardErrorPath</key>
+    <string>/Users/stephen/dev/social-tui-dev/main/logs/update_data.error.log</string>
+
+    <!-- Keep job alive if it exits -->
+    <key>KeepAlive</key>
+    <false/>
+
+    <!-- Environment variables (if needed) -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
