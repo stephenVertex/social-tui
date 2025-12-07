@@ -65,7 +65,25 @@ Darko Mesaros,darko-mesaros
 
 ### Daily Workflow
 
-**Update data (scrape + import + stats)**:
+**Automated Updates (Recommended)**:
+
+The application can automatically scrape and import data every 6 hours using macOS LaunchAgent:
+
+```bash
+# Start automated updates (runs every 6 hours)
+./manage_scheduler.sh start
+
+# Check if scheduler is running
+./manage_scheduler.sh status
+
+# View recent logs
+./manage_scheduler.sh logs
+
+# Stop automated updates
+./manage_scheduler.sh stop
+```
+
+**Manual Update (scrape + import + stats)**:
 ```bash
 python update_data.py
 ```
@@ -73,7 +91,8 @@ python update_data.py
 This single command:
 1. Scrapes latest LinkedIn posts via `run_apify.sh`
 2. Imports data to database with time-series tracking
-3. Displays statistics
+3. Uploads cached media to S3
+4. Displays statistics
 
 **View posts interactively**:
 ```bash
@@ -180,6 +199,55 @@ python interactive_posts.py
 | `r` | Toggle "Manual repost with thoughts" |
 | `s` | Toggle "Save" |
 | `Escape` | Close modal and save selections |
+
+## Automated Scheduler (macOS)
+
+The application includes a LaunchAgent-based scheduler for macOS that automatically runs `update_data.py` every 6 hours.
+
+### Setup
+
+```bash
+# Start the scheduler (one-time setup)
+./manage_scheduler.sh start
+```
+
+This will:
+1. Copy the plist configuration to `~/Library/LaunchAgents/`
+2. Load and start the LaunchAgent
+3. Schedule updates to run every 6 hours
+
+### Management
+
+```bash
+# Check status
+./manage_scheduler.sh status
+
+# View recent logs (last 50 lines)
+./manage_scheduler.sh logs
+
+# Follow logs in real-time
+./manage_scheduler.sh tail
+
+# Restart the scheduler
+./manage_scheduler.sh restart
+
+# Stop the scheduler
+./manage_scheduler.sh stop
+```
+
+### Logs
+
+Automated updates write logs to:
+- `logs/update_data.log` - Standard output (scraping progress, import stats)
+- `logs/update_data.error.log` - Error output (warnings and errors)
+
+### Configuration
+
+The scheduler is configured via `com.socialtui.updatedata.plist`:
+- **Interval**: Runs every 6 hours (21600 seconds)
+- **Python**: Uses `uv run python3` to ensure dependencies are available
+- **PATH**: Includes `/opt/homebrew/bin` for `apify` command
+- **Working Directory**: Automatically set to project directory
 
 ## Project Structure
 
@@ -316,6 +384,8 @@ profiles = pm.get_profiles_by_tag("aws")
 
 ### Data Collection
 - `run_apify.sh` - Scraper script for fetching LinkedIn posts
+- `manage_scheduler.sh` - LaunchAgent manager for automated updates (macOS)
+- `com.socialtui.updatedata.plist` - LaunchAgent configuration (runs every 6 hours)
 - `scripts/` - Utility scripts for data extraction and processing
 
 ### Data Files

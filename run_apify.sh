@@ -49,7 +49,7 @@ tail -n +2 data/input-data.csv | while IFS=, read -r name username; do
   echo "Processing username: $username -> $output_file"
 
   # Run apify command
-  echo "{\"username\": \"$username\", \"page_number\": 1, \"limit\": 10}" | apify call apimaestro/linkedin-profile-posts --silent --output-dataset > "$output_file"
+  echo "{\"username\": \"$username\", \"page_number\": 1, \"limit\": 10}" | /opt/homebrew/bin/apify call apimaestro/linkedin-profile-posts --silent --output-dataset > "$output_file"
 
   echo "Completed: $output_file"
   echo ""
