@@ -150,9 +150,9 @@ def insert_new_video(client, video_data, channel):
     }
     
     media_records = []
-    
+
     # 1. Video Media Record
-    media_id_video = f"pm-{uuid.uuid4().hex[:8]}"
+    media_id_video = f"med-{uuid.uuid4().hex[:8]}"
     media_record_video = {
         'media_id': media_id_video,
         'post_id': post_id,
@@ -169,8 +169,8 @@ def insert_new_video(client, video_data, channel):
             print(f"    - Downloading thumbnail: {thumbnail_url}")
             # Download and cache the thumbnail
             cache_result = download_and_cache_media(thumbnail_url, media_type='image')
-            
-            media_id_thumb = f"pm-{uuid.uuid4().hex[:8]}"
+
+            media_id_thumb = f"med-{uuid.uuid4().hex[:8]}"
             media_record_thumb = {
                 'media_id': media_id_thumb,
                 'post_id': post_id,
@@ -185,7 +185,7 @@ def insert_new_video(client, video_data, channel):
             print(f"    - Error downloading thumbnail: {e}")
             # If download fails, we can optionally insert it without local path or skip
             # For now, let's insert it without local path so we at least have the URL
-            media_id_thumb = f"pm-{uuid.uuid4().hex[:8]}"
+            media_id_thumb = f"med-{uuid.uuid4().hex[:8]}"
             media_record_thumb = {
                 'media_id': media_id_thumb,
                 'post_id': post_id,

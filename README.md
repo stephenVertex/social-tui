@@ -1,6 +1,6 @@
 # social-tui
 
-Interactive TUI application for viewing and managing LinkedIn posts from JSON data sources.
+Interactive TUI application for viewing and managing social media content from LinkedIn and YouTube.
 
 ## Features
 
@@ -22,10 +22,11 @@ Interactive TUI application for viewing and managing LinkedIn posts from JSON da
 - **Save Marked Posts**: Press `s` to export marked posts with action metadata to JSON
 
 ### Data Management
-- **SQLite Database**: Posts, profiles, tags, and engagement metrics stored in SQLite
+- **Multi-Platform Support**: Track content from LinkedIn and YouTube
+- **Supabase Database**: Posts, profiles, tags, and engagement metrics stored in Supabase
 - **AWS-Style Identifiers**: All entities use consistent AWS-style IDs (e.g., `p-a1b2c3d4`, `prf-9abc0def`)
-- **Time-Series Tracking**: Track engagement metrics (reactions, comments) over time
-- **Profile Management**: Organize LinkedIn profiles with tags
+- **Time-Series Tracking**: Track engagement metrics (reactions, comments, views) over time
+- **Profile Management**: Organize LinkedIn profiles and YouTube channels with tags
 - **Download Run Tracking**: Audit trail of all scraping sessions
 - **Automated Updates**: Single command to scrape, import, and view statistics
 
@@ -98,6 +99,41 @@ This single command:
 ```bash
 ./interactive_posts.py
 ```
+
+### YouTube Data Collection
+
+The application can track YouTube channels and monitor video statistics over time.
+
+**Fetch new videos from YouTube channels**:
+```bash
+python youtube_fetcher.py                    # Check last 5 days (default)
+python youtube_fetcher.py --days-back 7      # Check last 7 days
+```
+
+This will:
+1. Query active YouTube channels from the `profiles` table
+2. Fetch new videos from each channel using YouTube Data API
+3. Download and cache video thumbnails
+4. Store video metadata and initial statistics
+
+**Update statistics for existing videos**:
+```bash
+python update_youtube_stats.py                  # Update videos from last 30 days
+python update_youtube_stats.py --all            # Update all YouTube videos
+python update_youtube_stats.py --days-back 7    # Update videos from last 7 days
+python update_youtube_stats.py --limit 100      # Update only 100 most recent videos
+```
+
+This will:
+1. Query existing YouTube videos from the database
+2. Fetch current statistics (views, likes, comments) from YouTube API
+3. Create new time-series snapshots in `data_downloads` table
+4. Enable tracking of video performance over time
+
+**YouTube API Requirements**:
+- Add `YOUTUBE_API_KEY` to your `.env` file
+- Default quota: 10,000 units/day
+- Fetching 37 videos uses ~104 units (less than 2% of daily quota)
 
 ## Usage
 
@@ -261,34 +297,40 @@ social-tui/
 │       └── linkedin/
 │           └── *.json        # Raw LinkedIn post data
 ├── output/                    # Generated files (marked posts, reports)
-├── cache/                     # Cached images
+├── cache/                     # Cached images and thumbnails
 ├── specs/                     # Database and feature specifications
 ├── interactive_posts.py       # Main TUI application
-├── update_data.py            # Unified data update script
+├── update_data.py            # Unified LinkedIn data update script
 ├── manage_data.py            # Database import/stats management
+├── youtube_fetcher.py        # YouTube video fetcher
+├── update_youtube_stats.py   # YouTube stats updater (time-series)
 ├── migrate_database.py       # Schema migration tool
 ├── migrate_historical_runs.py # Historical data backfill
 ├── profile_manager.py        # Profile CRUD operations
 ├── tag_manager.py            # Tag management
+├── supabase_client.py        # Supabase database client
+├── media_cache.py            # Media download and caching utilities
 ├── db_utils.py               # Database utilities (ID generation)
 └── run_apify.sh              # LinkedIn scraper script
 ```
 
 ## Database Schema
 
-The application uses SQLite with AWS-style identifiers for all entities.
+The application uses Supabase (PostgreSQL) with AWS-style identifiers for all entities.
 
 ### Core Tables
 
 **Posts** (`p-xxxxxxxx`)
 - Unique posts with metadata (author, timestamp, content, URL)
-- Platform-agnostic design (currently LinkedIn)
+- Platform-agnostic design (supports LinkedIn posts and YouTube videos)
 - Read/marked status for UI
+- Platform field to distinguish content sources
 
 **DataDownloads** (`dl-xxxxxxxx`)
-- Time-series metric snapshots (reactions, comments, reposts)
+- Time-series metric snapshots (reactions, comments, reposts, views)
 - Links to posts and download runs
 - Enables engagement tracking over time
+- Platform-specific stats stored in `stats_json` field
 
 **DownloadRuns** (`run-xxxxxxxx`)
 - Audit trail of scraping sessions
@@ -296,7 +338,8 @@ The application uses SQLite with AWS-style identifiers for all entities.
 - System info for debugging
 
 **Profiles** (`prf-xxxxxxxx`)
-- LinkedIn profiles being monitored
+- LinkedIn profiles and YouTube channels being monitored
+- Platform field to distinguish profile types
 - Active/inactive status
 - Tag associations
 
@@ -308,11 +351,16 @@ The application uses SQLite with AWS-style identifiers for all entities.
 **ProfileTags** (`pft-xxxxxxxx`)
 - Junction table for profile-tag relationships
 
+**PostMedia** (`med-xxxxxxxx`)
+- Media attachments for posts (images, videos, thumbnails)
+- Local file paths for cached media
+- Media dimensions and metadata
+- Used for YouTube thumbnails and LinkedIn images
+
 ### Future Tables (Schema Ready)
 
 - **PostTags** (`ptg-xxxxxxxx`) - AI-powered post tagging
 - **ActionQueue** (`act-xxxxxxxx`) - Queued actions (autoreact, comment, etc.)
-- **PostMedia** (`med-xxxxxxxx`) - Media tracking with AI analysis
 
 ### Database Management
 
@@ -384,6 +432,10 @@ profiles = pm.get_profiles_by_tag("aws")
 
 ### Data Collection
 - `run_apify.sh` - Scraper script for fetching LinkedIn posts
+- `youtube_fetcher.py` - Fetches new videos from monitored YouTube channels
+- `update_youtube_stats.py` - Updates statistics for existing YouTube videos (time-series)
+- `media_cache.py` - Downloads and caches media (thumbnails, images)
+- `supabase_client.py` - Supabase database client and utilities
 - `manage_scheduler.sh` - LaunchAgent manager for automated updates (macOS)
 - `com.socialtui.updatedata.plist` - LaunchAgent configuration (runs every 6 hours)
 - `scripts/` - Utility scripts for data extraction and processing
