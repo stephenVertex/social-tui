@@ -6,14 +6,15 @@ This script:
 1. Queries existing YouTube videos from the database
 2. Fetches current statistics from YouTube API
 3. Inserts new data_downloads records for time-series tracking
-4. Shows updated statistics
+4. Updates last_synced_at for YouTube profiles
+5. Shows updated statistics
 
 Usage:
-    python update_youtube_stats.py                    # Update videos from last 30 days
-    python update_youtube_stats.py --days-back 7      # Update videos from last 7 days
-    python update_youtube_stats.py --limit 100        # Update only 100 most recent videos
-    python update_youtube_stats.py --all              # Update all YouTube videos
-    python update_youtube_stats.py --channel USERNAME # Update specific channel only
+    uv run python update_youtube_stats.py                    # Update videos from last 30 days
+    uv run python update_youtube_stats.py --days-back 7      # Update videos from last 7 days
+    uv run python update_youtube_stats.py --limit 100        # Update only 100 most recent videos
+    uv run python update_youtube_stats.py --all              # Update all YouTube videos
+    uv run python update_youtube_stats.py --channel USERNAME # Update specific channel only
 """
 
 import argparse
@@ -157,6 +158,43 @@ def insert_stats_snapshot(client, post_id: str, video_id: str, stats: Dict[str, 
         return False
 
 
+def update_profile_sync_time(client, channel_usernames: List[str]) -> int:
+    """Updates last_synced_at for YouTube profiles.
+
+    Args:
+        client: Supabase client
+        channel_usernames: List of channel usernames to update
+
+    Returns:
+        Number of profiles updated
+    """
+    if not channel_usernames:
+        return 0
+
+    try:
+        sync_time = datetime.now(timezone.utc).isoformat()
+        updated_count = 0
+
+        for username in channel_usernames:
+            try:
+                result = client.table('profiles').update({
+                    'last_synced_at': sync_time,
+                    'updated_at': sync_time
+                }).eq('username', username).eq('platform', 'youtube').execute()
+
+                if result.data:
+                    updated_count += 1
+            except Exception as e:
+                print(f"  - Warning: Could not update sync time for {username}: {e}")
+
+        print(f"  - Updated last_synced_at for {updated_count} channel(s)")
+        return updated_count
+
+    except Exception as e:
+        print(f"  - Error updating profile sync times: {e}")
+        return 0
+
+
 def update_video_stats(client, youtube, videos: List[Dict[str, Any]], run_id: str) -> Dict[str, int]:
     """Updates statistics for a list of videos.
 
@@ -173,7 +211,8 @@ def update_video_stats(client, youtube, videos: List[Dict[str, Any]], run_id: st
         'total': len(videos),
         'updated': 0,
         'errors': 0,
-        'api_calls': 0
+        'api_calls': 0,
+        'channels_updated': set()
     }
 
     if not videos:
@@ -181,8 +220,9 @@ def update_video_stats(client, youtube, videos: List[Dict[str, Any]], run_id: st
 
     print(f"\nUpdating statistics for {len(videos)} videos...")
 
-    # Extract video IDs
+    # Extract video IDs and track channels
     video_ids = [video['urn'] for video in videos]
+    channels = set(video['author_username'] for video in videos if video.get('author_username'))
 
     # Fetch stats in batches
     batch_size = 50
@@ -204,10 +244,17 @@ def update_video_stats(client, youtube, videos: List[Dict[str, Any]], run_id: st
 
         if insert_stats_snapshot(client, video['post_id'], video_id, video_stat):
             stats['updated'] += 1
+            if video.get('author_username'):
+                stats['channels_updated'].add(video['author_username'])
             if stats['updated'] % 10 == 0:
                 print(f"  - Updated {stats['updated']}/{len(video_stats)} videos...")
         else:
             stats['errors'] += 1
+
+    # Update last_synced_at for all channels that were updated
+    if stats['channels_updated']:
+        print(f"\nUpdating last_synced_at for {len(stats['channels_updated'])} channel(s)...")
+        update_profile_sync_time(client, list(stats['channels_updated']))
 
     return stats
 
@@ -267,11 +314,13 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python update_youtube_stats.py                      # Update videos from last 30 days
-  python update_youtube_stats.py --days-back 7        # Update videos from last 7 days
-  python update_youtube_stats.py --limit 100          # Update only 100 most recent videos
-  python update_youtube_stats.py --all                # Update all YouTube videos
-  python update_youtube_stats.py --channel USERNAME   # Update specific channel only
+  uv run python update_youtube_stats.py                      # Update videos from last 30 days
+  uv run python update_youtube_stats.py --days-back 7        # Update videos from last 7 days
+  uv run python update_youtube_stats.py --limit 100          # Update only 100 most recent videos
+  uv run python update_youtube_stats.py --all                # Update all YouTube videos
+  uv run python update_youtube_stats.py --channel USERNAME   # Update specific channel only
+
+Note: This script also updates the last_synced_at field for all YouTube profiles that were updated.
         """
     )
     parser.add_argument(
@@ -376,11 +425,12 @@ Examples:
     print("\n" + "=" * 70)
     print("Update Summary")
     print("=" * 70)
-    print(f"  Run ID:         {run_id}")
-    print(f"  Videos Found:   {update_stats['total']}")
-    print(f"  Stats Updated:  {update_stats['updated']}")
-    print(f"  API Calls:      {update_stats['api_calls']}")
-    print(f"  Errors:         {update_stats['errors']}")
+    print(f"  Run ID:            {run_id}")
+    print(f"  Videos Found:      {update_stats['total']}")
+    print(f"  Stats Updated:     {update_stats['updated']}")
+    print(f"  Channels Updated:  {len(update_stats.get('channels_updated', set()))}")
+    print(f"  API Calls:         {update_stats['api_calls']}")
+    print(f"  Errors:            {update_stats['errors']}")
 
     # Show statistics
     if not args.no_stats:

@@ -3,16 +3,17 @@
 Unified data update script for social-tui.
 
 This script:
+0. Exports active LinkedIn profiles to CSV (data/input-data.csv)
 1. Runs run_apify.sh to scrape latest LinkedIn data
 2. Imports the scraped data into Supabase database
 3. Uploads newly cached media to S3
 4. Shows updated statistics
 
 Usage:
-    python update_data.py                    # Full update
-    python update_data.py --skip-scrape      # Only import existing data
-    python update_data.py --skip-s3-upload   # Skip S3 upload
-    python update_data.py --date 20251129    # Import specific date
+    uv run python update_data.py                    # Full update (export + scrape + import + S3 + stats)
+    uv run python update_data.py --skip-scrape      # Only import existing data
+    uv run python update_data.py --skip-s3-upload   # Skip S3 upload
+    uv run python update_data.py --date 20251129    # Import specific date
 """
 
 import argparse
@@ -24,6 +25,53 @@ from pathlib import Path
 from supabase_client import get_supabase_client
 from manage_data import create_download_run, import_directory, complete_download_run
 from scripts.s3_upload.upload_to_s3 import upload_media_to_s3
+from profile_manager import ProfileManager
+
+
+def export_linkedin_profiles():
+    """Export LinkedIn profiles to CSV for Apify scraping.
+
+    Returns:
+        Number of profiles exported
+    """
+    print("=" * 70)
+    print("Step 0: Exporting LinkedIn Profiles to CSV")
+    print("=" * 70)
+
+    try:
+        manager = ProfileManager()
+
+        # Get active LinkedIn profiles only
+        all_profiles = manager.get_all_profiles(active_only=True)
+        linkedin_profiles = [p for p in all_profiles if p.get('platform') == 'linkedin']
+
+        if not linkedin_profiles:
+            print("Warning: No active LinkedIn profiles found")
+            return 0
+
+        # Export only LinkedIn profiles to CSV
+        csv_path = Path("data/input-data.csv")
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+
+        import csv
+        with open(csv_path, 'w', encoding='utf-8', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=['name', 'username'])
+            writer.writeheader()
+
+            for profile in linkedin_profiles:
+                writer.writerow({
+                    'name': profile['name'],
+                    'username': profile['username']
+                })
+
+        print(f"✓ Exported {len(linkedin_profiles)} active LinkedIn profile(s) to {csv_path}")
+        return len(linkedin_profiles)
+
+    except Exception as e:
+        print(f"✗ Export failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return 0
 
 
 def run_apify_scrape(data_dir=None):
@@ -35,7 +83,7 @@ def run_apify_scrape(data_dir=None):
     Returns:
         True if successful, False otherwise
     """
-    print("=" * 70)
+    print("\n" + "=" * 70)
     print("Step 1: Scraping LinkedIn Data")
     print("=" * 70)
 
@@ -332,12 +380,14 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python update_data.py                      # Full update (scrape + import + S3 + stats)
-  python update_data.py --skip-scrape        # Import today's data only (+ S3 + stats)
-  python update_data.py --skip-s3-upload     # Update without S3 upload
-  python update_data.py --date 20251129      # Import specific date (most recent run)
-  python update_data.py --retry              # Retry most recent run (scrape missing + import)
-  python update_data.py --force              # Bypass 2-hour rate limit check
+  uv run python update_data.py                      # Full update (export CSV + scrape + import + S3 + stats)
+  uv run python update_data.py --skip-scrape        # Import today's data only (+ S3 + stats)
+  uv run python update_data.py --skip-s3-upload     # Update without S3 upload
+  uv run python update_data.py --date 20251129      # Import specific date (most recent run)
+  uv run python update_data.py --retry              # Retry most recent run (export CSV + scrape missing + import)
+  uv run python update_data.py --force              # Bypass 2-hour rate limit check
+
+Note: The script automatically exports active LinkedIn profiles to CSV before scraping.
         """
     )
     parser.add_argument(
@@ -398,6 +448,14 @@ Examples:
             print("\nError: No existing data directories found to retry")
             sys.exit(1)
         print(f"\nRetrying most recent run: {retry_directory.parent}")
+
+    # Step 0: Export LinkedIn profiles to CSV (before scraping)
+    if not args.skip_scrape:
+        print()  # Add spacing
+        profile_count = export_linkedin_profiles()
+        if profile_count == 0:
+            print("\nWarning: No LinkedIn profiles to scrape")
+            # Continue anyway in case user wants to import existing data
 
     # Step 1: Scrape (unless skipped)
     if not args.skip_scrape:
