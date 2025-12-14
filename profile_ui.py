@@ -718,6 +718,7 @@ class ProfileManagementScreen(Screen):
         table = self.query_one(DataTable)
         table.add_column("ID", key="id", width=6)
         table.add_column("Username", key="username", width=20)
+        table.add_column("Platform", key="platform", width=12)
         table.add_column("Name", key="name", width=25)
         table.add_column("Tags", key="tags", width=30)
         table.add_column("Active", key="active", width=8)
@@ -763,6 +764,7 @@ class ProfileManagementScreen(Screen):
             row_key = table.add_row(
                 str(profile['profile_id']),
                 profile['username'],
+                profile.get('platform', 'linkedin'),
                 profile['name'],
                 tag_display,
                 active_display,
