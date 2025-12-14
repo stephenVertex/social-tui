@@ -1398,6 +1398,7 @@ class MainScreen(Screen):
         table = self.query_one(DataTable)
         table.add_column("Date", key="date")
         table.add_column("Username", key="username")
+        table.add_column("Platform", key="platform")
         table.add_column("Text Preview", key="text")
         table.add_column("Media", key="media")
         table.add_column("Marked", key="marked")
@@ -1534,6 +1535,7 @@ class MainScreen(Screen):
                     post['marked_indicator'] = row['marked_indicator']
                     post['posted_at_formatted'] = row['posted_at_formatted'] # Add formatted date for table
                     post['author_username'] = row['author_username']
+                    post['platform'] = row['platform'] # Add platform for table
 
                     # Mark as new if it belongs to the latest import batch (within 5 minutes)
                     if latest_import_timestamp and row['first_seen_at']:
@@ -1842,7 +1844,7 @@ class MainScreen(Screen):
             menu_text = """
 [bold]Filter options:[/bold]
  u - username (fuzzy match)
- p - platform (e.g., linkedin, twitter)
+ p - platform (e.g., linkedin, substack)
  c - content (full text search)
  d - min date (YYYY-MM-DD)
  D - max date (YYYY-MM-DD)
@@ -2046,12 +2048,13 @@ class MainScreen(Screen):
         """Helper to add a single post to the DataTable."""
         date_str = post.get("posted_at_formatted", "")
         username = post.get("author_username", "")
+        platform = post.get("platform", "") # Get platform
         text_preview = post.get("text_preview", "")
         media_indicator = post.get("media_indicator", "")
         marked_indicator = post.get("marked_indicator", "")
         new_indicator = "🆕" if post.get("_is_new") else ""
 
-        row_key = table.add_row(date_str, username, text_preview, media_indicator, marked_indicator, new_indicator)
+        row_key = table.add_row(date_str, username, platform, text_preview, media_indicator, marked_indicator, new_indicator)
         self.post_index_map[row_key] = idx
 
 
