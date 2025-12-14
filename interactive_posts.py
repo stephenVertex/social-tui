@@ -1398,7 +1398,7 @@ class MainScreen(Screen):
         table = self.query_one(DataTable)
         table.add_column("Date", key="date")
         table.add_column("Username", key="username")
-        table.add_column("Platform", key="platform")
+        table.add_column("Plt", key="platform", width=4)
         table.add_column("Text Preview", key="text")
         table.add_column("Media", key="media")
         table.add_column("Marked", key="marked")
@@ -2048,7 +2048,19 @@ class MainScreen(Screen):
         """Helper to add a single post to the DataTable."""
         date_str = post.get("posted_at_formatted", "")
         username = post.get("author_username", "")
-        platform = post.get("platform", "") # Get platform
+        
+        # Map platform to 2-letter code
+        platform_full = post.get("platform", "").lower()
+        platform_map = {
+            'linkedin': 'LI',
+            'substack': 'SB',
+            'youtube': 'YT',
+            'twitter': 'X',
+            'instagram': 'IG',
+            'bluesky': 'BS'
+        }
+        platform = platform_map.get(platform_full, platform_full[:2].upper() if platform_full else "")
+        
         text_preview = post.get("text_preview", "")
         media_indicator = post.get("media_indicator", "")
         marked_indicator = post.get("marked_indicator", "")
