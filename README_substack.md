@@ -30,8 +30,21 @@ uv run python3 substack_fetcher.py
 
 This will:
 1.  Fetch all active profiles with `platform='substack'`.
-2.  Parse their RSS feeds.
-3.  Upsert articles into the `posts` table (avoiding duplicates).
+2.  Parse their RSS feeds (typically the latest ~20 posts).
+3.  Upsert articles into the `posts` table.
+
+### 3. Fetch Analytics & Backfill
+To fetch likes, comments, and older posts (up to 50 recent), run:
+
+```bash
+uv run python3 substack_analytics_fetcher.py
+```
+
+This will:
+1.  Iterate through the last 50 posts for each profile.
+2.  Update `likes_count` and `comments_count`.
+3.  **Backfill** any posts that are missing from the database (e.g., older than what the RSS feed provides).
+4.  Run slowly (1 request/second) to respect rate limits.
 
 ## Data Structure
 Articles are stored in the `posts` table with:
@@ -39,4 +52,6 @@ Articles are stored in the `posts` table with:
 *   `urn`: `substack:<username>:<article_slug>`
 *   `text_content`: Article summary/description.
 *   `url`: Link to the full article.
+*   `likes_count`: Number of likes/hearts.
+*   `comments_count`: Number of comments.
 

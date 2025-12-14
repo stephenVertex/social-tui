@@ -21,6 +21,10 @@ from supabase_client import get_supabase_client
 from profile_manager import ProfileManager
 from manage_data import create_download_run, complete_download_run
 
+import time
+from dateutil import parser as date_parser
+from db_utils import generate_aws_id, PREFIX_POST
+
 # Placeholder for actual analytics update function
 # In a real scenario, this would interact with the Supabase client
 # to update existing post entries with new like/comment counts.
@@ -43,6 +47,7 @@ def fetch_and_update_substack_analytics():
 
     total_posts_processed = 0
     total_posts_updated = 0
+    total_posts_created = 0
     total_posts_skipped = 0
     
     try:
@@ -64,12 +69,20 @@ def fetch_and_update_substack_analytics():
             print(f"\nProcessing Substack: {username}.substack.com")
             try:
                 newsletter = Newsletter(f"https://{username}.substack.com")
-                posts = newsletter.get_posts(limit=20) # Fetch recent posts
+                posts = newsletter.get_posts(limit=50) # Fetch recent posts
 
                 for post_obj in posts:
                     total_posts_processed += 1
+                    # Rate limiting protection
+                    time.sleep(1)
+                    
                     post_url = post_obj.url
-                    post_urn = f"substack:{username}:{post_obj.slug}"
+                    # Use slug for URN if available, else fallback to extracting from URL
+                    slug = getattr(post_obj, 'slug', None)
+                    if not slug:
+                        slug = post_url.rstrip('/').split('/')[-1]
+
+                    post_urn = f"substack:{username}:{slug}"
 
                     print(f"  - Fetching metadata for: {post_url}")
                     try:
@@ -82,20 +95,55 @@ def fetch_and_update_substack_analytics():
 
                         print(f"    Likes: {likes_count}, Comments: {comments_count}")
 
-                        # Update the 'posts' table in Supabase
-                        # Assuming 'posts' table has 'likes_count' and 'comments_count' columns
-                        response = client.table('posts').update({
-                            'likes_count': likes_count,
-                            'comments_count': comments_count,
-                            'updated_at': datetime.now(timezone.utc).isoformat()
-                        }).eq('urn', post_urn).execute()
+                        # Check if post exists
+                        existing = client.table('posts').select('post_id').eq('urn', post_urn).execute()
 
-                        if response.data:
-                            print(f"    ✓ Updated analytics for URN: {post_urn}")
-                            total_posts_updated += 1
+                        if existing.data:
+                            # Update existing post
+                            response = client.table('posts').update({
+                                'likes_count': likes_count,
+                                'comments_count': comments_count,
+                                'updated_at': datetime.now(timezone.utc).isoformat()
+                            }).eq('urn', post_urn).execute()
+
+                            if response.data:
+                                print(f"    ✓ Updated analytics for URN: {post_urn}")
+                                total_posts_updated += 1
                         else:
-                            print(f"    ✗ No post found with URN: {post_urn} or no update needed.")
-                            total_posts_skipped += 1
+                            # Create new post (Backfill)
+                            print(f"    + Creating new post for URN: {post_urn}")
+                            
+                            # Parse date
+                            post_date_str = metadata.get('post_date')
+                            if post_date_str:
+                                dt = date_parser.parse(post_date_str)
+                                posted_at_timestamp = int(dt.timestamp())
+                            else:
+                                posted_at_timestamp = int(datetime.now(timezone.utc).timestamp())
+
+                            description = metadata.get('description', '') or metadata.get('subtitle', '')
+                            title = metadata.get('title', '')
+                            text_content = f"{title}\n\n{description}" if title else description
+
+                            new_post = {
+                                'post_id': generate_aws_id(PREFIX_POST),
+                                'urn': post_urn,
+                                'platform': 'substack',
+                                'posted_at_timestamp': posted_at_timestamp,
+                                'author_username': username,
+                                'text_content': text_content,
+                                'post_type': 'article',
+                                'url': post_url,
+                                'likes_count': likes_count,
+                                'comments_count': comments_count,
+                                'is_read': False,
+                                'is_marked': False,
+                                'created_at': datetime.now(timezone.utc).isoformat(),
+                                'updated_at': datetime.now(timezone.utc).isoformat()
+                            }
+                            
+                            client.table('posts').insert(new_post).execute()
+                            total_posts_created += 1
 
                     except Exception as e:
                         print(f"    ✗ Error fetching or updating analytics for {post_url}: {e}")
@@ -110,15 +158,15 @@ def fetch_and_update_substack_analytics():
         # Complete the download run with overall statistics
         stats = {
             'processed': total_posts_processed,
-            'new': 0, # Not creating new posts, only updating
+            'new': total_posts_created,
             'duplicates': total_posts_skipped, # Count as skipped if not found/updated
-            'errors': total_posts_processed - total_posts_updated - total_posts_skipped, # Basic error calculation
+            'errors': total_posts_processed - total_posts_updated - total_posts_created - total_posts_skipped, 
         }
         complete_download_run(client, run_id, stats)
         print("\nAnalytics Fetch Summary:")
         print(f"  Total Posts Processed: {total_posts_processed}")
         print(f"  Total Posts Updated:   {total_posts_updated}")
-        print(f"  Total Posts Skipped:   {total_posts_skipped}")
+        print(f"  Total Posts Created:   {total_posts_created}")
         print(f"  Errors:                {stats['errors']}")
         print("\n✓ Substack Analytics fetching completed.")
 
